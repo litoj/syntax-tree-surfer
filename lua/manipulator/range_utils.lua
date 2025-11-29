@@ -1,0 +1,138 @@
+---@class manipulator.range_utils
+local M = {}
+
+---@class manipulator.BufRange
+---@field range Range4 0-indexed range with the buf number
+---@field buf integer? (default: 0)
+
+---@alias manipulator.RangeType manipulator.Region|manipulator.BufRange|Range4 0-inexed range
+
+do -- ### Range converions
+	---@param range manipulator.RangeType any 0-indexed range
+	---@param explicit_buf? boolean if true replace buf=0 with actual bufnr
+	---@return integer
+	---@return Range4|{} 0-indexed buffer number and range or an empty table
+	function M.decompose(range, explicit_buf)
+		local buf = range.buf or 0
+		if explicit_buf and buf == 0 then buf = vim.api.nvim_get_current_buf() end
+		---@diagnostic disable-next-line: invisible
+		return buf, range.range or (range.range0 and range:range0()) or range
+	end
+
+	---@param range Range4 0-indexed range
+	function M.lsp_range(range)
+		return {
+			start = { line = range[1], character = range[2] },
+			['end'] = { line = range[3], character = range[4] + 1 },
+		}
+	end
+
+	---@param range Range
+	function M.offset(range, offset)
+		for i = 1, #range do
+			range[i] = range[i] + offset
+		end
+		return range
+	end
+end
+
+do -- ### Comparators
+	---@param a Range
+	---@param b Range
+	---@return integer # <0 if a<b, 0 if a==b, >0 if a>b
+	function M.cmpPoint(a, b) return a[1] == b[1] and a[2] - b[2] or a[1] - b[1] end
+
+	---@param a Range4
+	---@param b Range2|Range4
+	---@return integer # comparison of the starts
+	---@return integer # comparison of the ends
+	function M.cmpRange(a, b)
+		return a[1] == b[1] and a[2] - b[2] or a[1] - b[1],
+			b[3] and (a[3] == b[3] and a[4] - b[4] or a[3] - b[3])
+				or (a[3] == b[1] and a[4] - b[2] or a[3] - b[1])
+	end
+
+	---@param a Range4
+	---@param b Range4
+	---@return integer # >0 if {b} is a subset of {a}, 0 when equal, <0 otherwise
+	function M.rangeContains(a, b)
+		local r1, r2 = M.cmpRange(a, b)
+		return r1 <= 0 and r2 >= 0 and (r1 == 0 and r2 == 0 and 0 or 1) or -1
+	end
+end
+
+do -- ### Current state helpers
+	---@param range manipulator.RangeType 0-indexed range
+	---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: false)
+	function M.get_lines(range, cut_to_range)
+		local buf
+		buf, range = M.decompose(range)
+		local lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
+
+		if cut_to_range then
+			if #lines == 1 then
+				lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
+			else
+				lines[1] = lines[1]:sub(range[2] + 1)
+				lines[#lines] = lines[#lines]:sub(1, range[4] + 1)
+			end
+		end
+
+		return lines
+	end
+
+	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
+	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
+
+	---@param v_modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
+	---@return Range4? 0-indexed
+	---@return boolean? leading if cursor was at the beginning of the current selection
+	function M.get_visual(v_modes)
+		v_modes = type(v_modes) == 'table' or { v = true, V = true, ['\022'] = true }
+		local mode = vim.fn.mode():sub(1, 1) -- we don't need full details on the mode
+		if not v_modes[mode] then return end
+
+		local from, to = vim.fn.getpos 'v', vim.fn.getpos '.'
+		local leading = false
+		if from[2] > to[2] or (from[2] == to[2] and from[3] > to[3]) then -- [1]=bufnr
+			local tmp = to
+			to = from
+			from = tmp
+			leading = true
+		end
+		if mode == 'V' then
+			from[3] = 1
+			to[3] = #vim.api.nvim_buf_get_lines(0, to[2] - 1, to[2], true)[1] + 1
+		end
+
+		return {
+			from[2] - 1,
+			from[3] - 1,
+			to[2] - 1,
+			to[3] - 1,
+		}, leading
+	end
+
+	---@param mouse? boolean if mouse or cursor position should be retrieved
+	---@return manipulator.BufRange
+	function M.current_point(mouse)
+		local ret
+		if mouse then
+			local m = vim.fn.getmousepos()
+			ret = {
+				buf = vim.api.nvim_win_get_buf(m.winid),
+				range = { m.line - 1, m.column - 1 },
+				mouse = true,
+			}
+		else
+			ret = { buf = 0, range = vim.api.nvim_win_get_cursor(0) }
+			ret.range[1] = ret.range[1] - 1
+		end
+
+		ret.range[3] = ret.range[1]
+		ret.range[4] = ret.range[2]
+		return ret
+	end
+end
+
+return M
