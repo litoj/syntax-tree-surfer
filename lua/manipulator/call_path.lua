@@ -54,12 +54,14 @@ local CallPath = {}
 ---Calling the build path:
 --- - for keymappings pass in the `.fn` field,
 --- - for direct evaluation call `:exec()`/`.fn()` manually
+---@overload fun(o?:manipulator.CallPath.Opts):manipulator.CallPath for generic executor builds
 ---@class manipulator.CallPath.module: manipulator.CallPath
 ---@field tsregion manipulator.CallPath.TSRegion|fun(opts:manipulator.TSRegion.module.current.Opts):manipulator.CallPath.TSRegion
 ---@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
 ---@field class manipulator.CallPath
 local M = UTILS.static_wrap_for_oop(CallPath, {
 	__index = function(_, key) return CallPath:new({ item = mod_wrap })[key] end,
+	__call = function(self, args) return self:new(args) end,
 })
 
 ---@class manipulator.CallPath.Opts

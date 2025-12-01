@@ -71,20 +71,19 @@ do -- ### module helpers
 	---@generic I
 	---@generic O
 	---@param oop `I` the class we want to add some extra fn to without being visible in the class
-	---@param static `O` object with static methods that should not be visible from {oop}
+	---@param static `O`|table object with static methods that should not be visible from {oop}
 	---@return O|I|{class:I} static delegating all {oop} functionality back to {oop}
 	function M.static_wrap_for_oop(oop, static)
 		rawset(static, 'class', oop)
 		local idx = static.__index
-		return setmetatable(static, {
-			__new_index = static.__new_index or function(_, k, v) oop[k] = v end,
-			__index = function(_, k)
-				local val = oop[k]
-				if type(val) == 'function' then val = M.fn_self_wrap(static, oop, k) end
-				if val ~= nil or not idx then return val end
-				return idx(static, k)
-			end,
-		})
+		static.__index = function(_, k)
+			local val = oop[k]
+			if type(val) == 'function' then val = M.fn_self_wrap(static, oop, k) end
+			if val ~= nil or not idx then return val end
+			return idx(static, k)
+		end
+		if not static.__new_index then static.__new_index = function(_, k, v) oop[k] = v end end
+		return setmetatable(static, static)
 	end
 end
 

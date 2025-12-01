@@ -22,7 +22,8 @@ Batch.__index = Batch
 ---@field class manipulator.Batch
 local M = UTILS.static_wrap_for_oop(Batch, {})
 
----@type manipulator.Batch.Config
+---@class manipulator.Batch.module.Config: manipulator.Batch.Config
+---@field recursive_limit? integer how many iterations is from_recursive() allowed by default
 M.default_config = {
 	on_nil_item = 'drop_all',
 	inherit = false,
@@ -51,28 +52,32 @@ M.config.presets.config = M.config
 ---@private
 ---@param opts manipulator.Batch.Opts
 function Batch:fix_items(opts)
-	local i = #self.items -- going in reverse order to make table.remove more efficient
-	while i > 0 do
-		if self.items[i] == nil or self.items[i] == self.Nil then
-			if opts.on_nil_item == 'drop' then
-				table.remove(self.items, i)
-			elseif opts.on_nil_item == 'drop_all' then
+	if opts.on_nil_item == 'include' then return end
+	local Nil = self.Nil
+	if opts.on_nil_item == 'drop_all' then
+		for _, item in ipairs(self.items) do
+			if item == nil or item == self.Nil then
 				self.items = {}
 				return
 			end
 		end
-		i = i - 1
+	else
+		local items = self.items
+		local i = #items -- going in reverse order to make table.remove more efficient
+		while i > 0 do
+			if items[i] == nil or items[i] == Nil then table.remove(items, i) end
+			i = i - 1
+		end
 	end
 end
 
----@param opts manipulator.Batch.Opts
+---@param opts? manipulator.Batch.Opts
 ---@param items manipulator.Region[] contents
----@param Nil? manipulator.Region|false what to return, if no items are valid/chosen
+---@param Nil manipulator.Region|false what to return, if no items are valid/chosen
 ---@return manipulator.Batch
 function Batch:new(opts, items, Nil)
-	if Nil == nil then Nil = self.Nil or items[1].Nil end
 	self = setmetatable({ items = items, Nil = Nil, config = self.config or M.config }, Batch)
-	self:fix_items(opts)
+	self:fix_items(opts or M.config)
 	return self
 end
 
@@ -84,7 +89,7 @@ function Batch:with(config, inplace)
 	---@diagnostic disable-next-line: inject-field
 	config = UTILS.expand_config(self.config.presets, self.config, config, inheritable_keys)
 
-	local ret = inplace and self or self:new(self.items, self.Nil)
+	local ret = inplace and self or self:new(config, self.items, self.Nil)
 	ret.config = config
 	return ret
 end
@@ -141,28 +146,27 @@ end
 --- - multi-return actions allowed
 ---@return manipulator.Batch
 function Batch:map(...)
-	local acc = {}
+	local items = {}
 	for _, action in ipairs { ... } do
 		action = action_to_fn(action)
 		for _, item in ipairs(self.items) do
 			for _, res in ipairs { action(item) } do
-				acc[#acc + 1] = res
+				items[#items + 1] = res
 			end
 		end
 	end
-
-	return self:new(M.config, acc)
+	return self:new(M.config, items, #items > 0 and items[1].Nil or self.Nil)
 end
 
 ---@param filter fun(item):boolean say which nodes should be carried over
 ---@return manipulator.Batch
 function Batch:filter(filter)
-	local acc = {}
+	local items = {}
 	for _, item in ipairs(self.items) do
-		if filter(item) then acc[#acc + 1] = item end
+		if filter(item) then items[#items + 1] = item end
 	end
 
-	return self:new(M.config, acc)
+	return self:new(M.config, items, self.Nil)
 end
 
 ---@class manipulator.Batch.pick.Opts
@@ -187,7 +191,7 @@ function Batch:pick(opts)
 	local callback = opts.callback
 	local pick
 	local function resolve(result)
-		callback(opts.multi and self:new(opts, result) or result[1] or self.Nil)
+		callback(opts.multi and self:new(opts, result, self.Nil) or result[1] or self.Nil)
 	end
 	if #self.items <= 1 and (opts.autoselect_single or #self.items == 0) then
 		if type(callback) ~= 'function' then callback = function(x) pick = x end end
@@ -286,7 +290,7 @@ function Batch:pick(opts)
 				if vim.bo[s.buf].ft == 'fzf' then
 					vim.defer_fn(function()
 						if opts.actions.default then resolve() end
-					end, self.fzf_resolve_timeout)
+					end, opts.fzf_resolve_timeout)
 					return true
 				end
 			end,
@@ -317,15 +321,13 @@ function M.from(src, ...)
 end
 
 ---@param src manipulator.Region|{Nil:table|false}
+---@param limit_or_fn integer|manipulator.Batch.Action
 ---@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
 ---@return manipulator.Batch
-function M.from_recursive(src, ...)
-	local actions = { ... }
-	local limit = M.config.recursive_limit
-	if type(actions[1]) == 'number' then
-		limit = actions[1]
-		table.remove(actions, 1)
-	end
+function M.from_recursive(src, limit_or_fn, ...)
+	local limit = type(limit_or_fn) == 'number' and limit_or_fn or M.config.recursive_limit
+	local actions = type(limit_or_fn) ~= 'number' and { limit_or_fn, ... } or { ... }
+
 	-- rawget to bypass CallPath modifications
 	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
 	local acc = {}

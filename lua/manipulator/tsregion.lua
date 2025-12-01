@@ -337,7 +337,7 @@ function TSRegion:next(opts) return self:sibling('next', opts) end
 function TSRegion:prev(opts) return self:sibling('prev', opts) end
 
 --- Get the next node in tree order (child, sibling, parent sibling)
----@param opts? manipulator.TSRegion.RawOpts|string
+---@param opts? manipulator.TSRegion.GraphOpts|string
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:next_in_graph(opts)
@@ -347,7 +347,7 @@ function TSRegion:next_in_graph(opts)
 end
 
 --- Get the prev node in tree order (child, sibling, parent sibling)
----@param opts? manipulator.TSRegion.RawOpts|string
+---@param opts? manipulator.TSRegion.GraphOpts|string
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:prev_in_graph(opts)
@@ -376,7 +376,7 @@ end
 
 ---@class manipulator.TSRegion.module.get.Opts: manipulator.TSRegion.Config
 ---@field buf? integer Buffer number (default: 0)
----@field range? Range4 0-indexed range: {start_row, start_col, end_row, end_col}, root node otherwise
+---@field range Range4 0-indexed range: {start_row, start_col, end_row, end_col}
 ---@field persistent? boolean should opts be saved as the default for the node (default: true)
 
 --- Get a node covering given range. (end-column-exclusive -> use +1)
@@ -389,17 +389,12 @@ function M.get(opts)
 	opts.buf = nil
 	if not ltree then return TSRegion:new(opts, opts) end
 	local range = opts.range
-	local ret
-	if range then
-		opts.range = nil
-		-- slow, but we have no other way to get the language info (and ltree) the node is in
-		if opts.langs then ltree = ltree:language_for_range(range) end
+	opts.range = nil
+	-- slow, but we have no other way to get the language info (and ltree) the node is in
+	if opts.langs then ltree = ltree:language_for_range(range) end
 
-		ret = TSRegion:new(opts, ltree:named_node_for_range(range), ltree)
-	else
-		ret = TSRegion:new({ types = { ['*'] = true } }, ltree:trees()[1]:root(), ltree)
-	end
-	return opts.persistent ~= false and ret:with(opts, true) or ret
+	local ret = TSRegion:new(opts, ltree:named_node_for_range(range), ltree)
+	return ret and opts.persistent ~= false and ret:with(opts, true) or ret
 end
 
 --- Get all matching nodes node covering given range. (end-column-exclusive -> use +1)
@@ -413,7 +408,7 @@ function M.get_all(opts)
 	if not ltree then return Batch:new({}, TSRegion.Nil) end
 
 	local types = opts.types
-	local nodes = {}
+	local nodes = {} ---@type manipulator.TSRegion[]
 	ltree:for_each_tree(function(tree, lt)
 		if lt ~= ltree or not opts.langs or not opts.langs[ltree:lang()] then return end
 		local node = tree:root()
@@ -438,11 +433,12 @@ function M.get_all(opts)
 		end
 	end)
 
-	return Batch:new(nodes, opts.nil_wrap and TSRegion.Nil)
+	return Batch:new(nil, nodes, opts.nil_wrap and TSRegion.Nil)
 end
 
 ---@class manipulator.TSRegion.module.current.Opts: manipulator.TSRegion.Config,manipulator.Region.module.current.Opts
 ---@field v_partial? integer >0 allows node larger than visual selection, 0 falls back to cursor, <0 nil (default: 1)
+---@field persistent? boolean should opts be saved as the default for the node (default: true)
 
 ---@param opts? manipulator.TSRegion.module.current.Opts persistent by default
 ---@return manipulator.TSRegion?

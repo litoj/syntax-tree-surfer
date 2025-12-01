@@ -1,6 +1,6 @@
 local UTILS = require 'manipulator.utils'
 local RANGE_UTILS = require 'manipulator.range_utils'
-local OPS = require 'manipulator.ops'
+local RANGE_ACTIONS = require 'manipulator.range_actions'
 local Batch = require 'manipulator.batch'
 
 ---@class manipulator.Region
@@ -90,10 +90,6 @@ end
 ---@return string # Concatenated lines of the region
 function Region:get_text() return self.text or table.concat(self:get_lines(true), '\n') end
 
-Region.highlight = OPS.highlight
-Region.mark = OPS.mark
-Region.paste = OPS.paste
-
 function Region:as_qf_item()
 	local r1 = self:range1()
 	return {
@@ -109,9 +105,14 @@ end
 ---@param action? 'a'|'r' `vim.fn.setqflist` action to perform - append or replace (default: 'a')
 function Region:add_to_qf(action) vim.fn.setqflist({ self:as_qf_item() }, action or 'a') end
 
+Region.highlight = RANGE_ACTIONS.highlight
+Region.mark = RANGE_ACTIONS.mark
+
 --- Jump to the start (or end, if {_end}) of the region.
 ---@param end_? boolean
-function Region:jump(end_) OPS.jump { buf = self.buf, range = end_ and self:end_() or self:start() } end
+function Region:jump(end_)
+	RANGE_ACTIONS.jump { buf = self.buf, range = end_ and self:end_() or self:start() }
+end
 
 ---@class manipulator.Region.select.Opts
 ---@field allow_grow? boolean if true, add to current visual selection (default: false)
@@ -123,7 +124,7 @@ function Region:select(opts)
 	opts = opts or {}
 	local range = self:range0()
 
-	local visual = RANGE_UTILS.get_visual()
+	local visual = RANGE_UTILS.current_visual()
 	if opts.allow_grow then
 		if visual then
 			range[1] = math.min(range[1], visual[1])
@@ -134,36 +135,179 @@ function Region:select(opts)
 	end
 
 	-- in nvim line is 1-indexed, col is 0-indexed
-	OPS.set_visual(range, opts.mode)
+	RANGE_ACTIONS.set_visual(range, opts.mode)
+end
+
+---@class manipulator.Region.paste.Opts
+---@field dst? manipulator.RangeType where to put the text relative to (default: self)
+---@field text? string text to paste (default: self:get_text())
+---@field mode 'before'|'after'|'over' method of modifying the dst range text content, doesn't support 'swap' mode
+---@field linewise? boolean
+
+--- Paste like with visual mode motions - prefer using vim motions
+---@param opts manipulator.Region.paste.Opts
+function Region:paste(opts)
+	local buf, range = RANGE_UTILS.decompose(opts.dst or self, true)
+	local text = opts.text or self:get_text()
+	if not buf or not range[1] then
+		vim.notify('Invalid dst to paste to', vim.log.levels.INFO)
+		return
+	end
+
+	local text = opts.text
+	if opts.linewise then
+		if opts.mode == 'after' then range[1] = range[3] + 1 end
+		range[3] = range[1]
+		range[2] = 0
+		range[4] = 0
+		text = text .. '\n'
+	elseif opts.mode == 'before' then
+		range[3] = range[1]
+		range[4] = range[2]
+	elseif opts.mode == 'after' then
+		range[1] = range[3]
+		range[2] = range[4]
+	end -- else mode = 'over'
+
+	vim.lsp.util.apply_text_edits(
+		{ { range = RANGE_UTILS.lsp_range(range), newText = text } },
+		buf,
+		'utf-8'
+	)
+end
+
+---@class manipulator.Region.swap.Opts
+---@field dst manipulator.RangeType direct destination to move to
+---@field cursor_with? 'dst'|'src'|false at which object should the cursor end up (default: 'src')
+---@field visual? boolean|manipulator.VisualModeEnabler which visual modes can be updated (use `{}` to disable) (default: true=all)
+
+--- Swap two regions. (buffers can differ)
+--- Maintains cursor (and visual selection) on the region specified via `opts.cursor_with`.
+---@param opts manipulator.Region.swap.Opts
+function Region:swap(opts)
+	local sbuf, srange = RANGE_UTILS.decompose(self, true)
+	local dbuf, drange = RANGE_UTILS.decompose(opts.dst, true)
+	if not srange[1] or not drange[1] then
+		vim.notify('Invalid range', vim.log.levels.INFO)
+		return
+	end
+
+	-- Calculate relative cursor positions to the colser of the regions or fallback start-to-end
+	if opts.cursor_with == nil then opts.cursor_with = 'src' end
+	local c_at_src = opts.cursor_with == 'src'
+	local c_pos, c_end, v_pos, v_end -- relative pos to the start or end of the region
+	if opts.cursor_with then
+		local range, leading =
+			RANGE_UTILS.current_visual(opts.visual == false and {} or opts.visual, false)
+		if not range or opts.visual == false then
+			c_pos = RANGE_UTILS.current_point(nil, false).range
+			if range then vim.cmd { cmd = 'normal', bang = true, args = { '\027' } } end
+		else
+			if leading then
+				c_pos, v_pos = range, { range[3], range[4] }
+			else
+				v_pos, c_pos = range, { range[3], range[4] }
+			end
+		end
+
+		-- calculate the relative position to the closer of the regions
+		do
+			local rel_range = srange
+			local rel_pos, is_end = RANGE_UTILS.posInRange(rel_range, c_pos, true)
+			if not rel_pos then
+				rel_range = drange
+				c_pos, c_end = RANGE_UTILS.posInRange(rel_range, c_pos, true)
+			else
+				c_pos, c_end = rel_pos, is_end
+			end
+		end
+
+		local size = c_at_src and srange or drange
+		size = RANGE_UTILS.subRange({ size[3], size[4] }, size)
+
+		if
+			v_pos -- if visual is allowed then always select to the whole region
+			or not c_pos
+			or RANGE_UTILS.cmpPoint(c_end and RANGE_UTILS.subRange({ 0, 0 }, c_pos) or c_pos, size) > 0
+			or (
+				v_pos
+				and RANGE_UTILS.cmpPoint(v_end and RANGE_UTILS.subRange({ 0, 0 }, v_pos) or v_pos, size)
+					> 0
+			)
+		then -- cursor outside manipulated ranges -> select start-to-end
+			c_pos, c_end = { 0, 0 }, c_end
+			if v_pos then
+				v_pos, v_end = { 0, 0 }, not c_end
+			end
+		end
+	end
+
+	local s_edit = { range = RANGE_UTILS.lsp_range(srange), newText = opts.dst:get_text() }
+	local d_edit = { range = RANGE_UTILS.lsp_range(drange), newText = self:get_text() }
+
+	local t_range = c_at_src and srange or drange
+	if sbuf ~= dbuf then
+		vim.lsp.util.apply_text_edits({ s_edit }, sbuf, 'utf-8')
+		vim.lsp.util.apply_text_edits({ d_edit }, dbuf, 'utf-8')
+
+		if opts.cursor_with then
+			local n_start = c_at_src and drange or srange
+			local n_buf = c_at_src and dbuf or sbuf
+			if v_pos then
+				RANGE_ACTIONS.jump(
+					RANGE_UTILS.addRange(RANGE_UTILS.subRange({ t_range[3], t_range[4] }, t_range), n_start)
+				)
+				vim.cmd.normal 'o'
+			end
+			RANGE_ACTIONS.jump({ buf = n_buf, range = n_start }, false)
+		end
+	else
+		-- always jump to the tracked region to calculate the shift afterwards
+		if opts.cursor_with then
+			RANGE_ACTIONS.jump({ buf = sbuf, range = c_at_src and drange or srange }, false)
+		end
+		vim.lsp.util.apply_text_edits({ s_edit, d_edit }, sbuf, 'utf-8')
+
+		-- TODO: make Region inherit from Range
+		if
+			opts.cursor_with
+			and (v_pos or c_end or c_pos[1] ~= 0 or c_pos[2] ~= 0) -- update position if jump wasn't enough
+		then
+			local n_start = RANGE_UTILS.current_point(nil, false).range
+			local n_end = RANGE_UTILS.addRange(
+				RANGE_UTILS.subRange({ t_range[3], t_range[4] }, t_range),
+				{ n_start[1], n_start[2] }
+			)
+
+			if v_pos then
+				RANGE_ACTIONS.jump(RANGE_UTILS.addRange(v_pos, v_end and n_end or n_start), false)
+				vim.cmd.normal 'o'
+			end
+			RANGE_ACTIONS.jump(RANGE_UTILS.addRange(c_pos, c_end and n_end or n_start), false)
+		end
+	end
 end
 
 do
 	---@type table<string,manipulator.Region?>
-	local active_moves_map = {}
+	local queued_map = {}
 
-	---@class manipulator.Region.move.Opts: manipulator.ops.move.Opts
-	---@field dst? manipulator.RangeType optional direct destination to move to
+	---@class manipulator.Region.queue_or_run.Opts: {[string]:any}
 	---@field group? string used as a key to allow multiple pending moves
 	---@field highlight? string|false highlight group to use, suggested to specify with custom {group} (default: 'IncSearch')
-	---@field allow_grow? boolean if selected region can be updated to the current when its fully contained (default: true)
+	---@field allow_grow? boolean if selected region can be updated to the current when its fully contained or should be deselected (default: false)
+	---@field run_on_queued? boolean should the action be run on the queued node or on the pairing one (default: false)
+	---@field action? 'swap'|'paste' which action to run on the pairing node
 
-	---@generic S
 	--- Move the node to a given position
-	---@param self `S`
-	---@param opts? manipulator.Region.move.Opts
-	---@return S? self returns itself if it was the first to be selected; nil, if selection was removed
-	function Region:move(opts) -- TODO: add linewise region info
+	---@param opts? manipulator.Region.queue_or_run.Opts included action options used only on run call
+	---@return manipulator.Region? self returns itself if it was the first to be selected; nil, if selection was removed
+	function Region:queue_or_run(opts) -- TODO: add linewise region info
 		opts = opts or {} -- TODO: make this into inheritable settings
-		opts.group = opts.group or 'default'
 		if opts.highlight == nil then opts.highlight = 'IncSearch' end
-		opts.mode = opts.mode or 'swap'
+		opts.group = opts.group or opts.highlight
 
-		if opts.dst then -- directly swap with a range
-			OPS.move(self, opts) -- also ensures NilNode doesn't get swapped (checks if range is valid)
-			return
-		end
-
-		local active = active_moves_map[opts.group]
+		local active = queued_map[opts.group]
 		if
 			active
 			and (
@@ -175,10 +319,13 @@ do
 				)
 			)
 		then
-			active_moves_map[opts.group] = nil
 			if vim.api.nvim_buf_is_valid(active.buf) then
+				queued_map[opts.group] = nil
 				active:highlight(false)
-				vim.notify(self.buf and 'Unselected' or 'Invalid region to move to', vim.log.levels.WARN)
+				vim.notify(
+					self.buf and 'Unselected' or 'Cannot run queued action on nil',
+					vim.log.levels.WARN
+				)
 				return
 			end
 			active = nil
@@ -187,27 +334,27 @@ do
 		if
 			not active
 			or (
-				opts.allow_grow ~= false
+				opts.allow_grow
 				and active.buf == self.buf -- test if we contain the active range
 				and RANGE_UTILS.rangeContains(self:range0(), active:range0()) >= 0
 			)
 		then
 			if active then active:highlight(false) end
-			active_moves_map[opts.group] = self
+			queued_map[opts.group] = self
 			if opts.highlight then self:highlight(opts.highlight) end
 			return self
 		else
 			opts.dst = active
-			OPS.move(self, opts)
+			self[opts.action or 'swap'](self, opts)
 			active:highlight(false)
-			active_moves_map[opts.group] = nil
+			queued_map[opts.group] = nil
 		end
 	end
 end
 
 do -- ### Wrapper for nil matches
 	---@class manipulator.NilRegion: manipulator.Region
-	local NilRegion = {}
+	local NilRegion = { range = {} }
 	function NilRegion:clone() return self end -- nil is only one
 	function NilRegion:__tostring() return 'Nil' end
 	-- allow move() to deselect the group and collect() to return an empty Batch
@@ -231,7 +378,7 @@ end
 ---@return boolean is_visual true if the range is from visual mode
 function M.current(opts)
 	opts = opts or {}
-	local range = opts.visual ~= false and RANGE_UTILS.get_visual(opts.visual)
+	local range = opts.visual ~= false and RANGE_UTILS.current_visual(opts.visual)
 	if range then return Region:new { range = range }, true end
 	return Region:new(RANGE_UTILS.current_point(opts.mouse)), false
 end

@@ -1,5 +1,8 @@
 ---@class manipulator.range_utils
-local M = {}
+---@field false_end_in_insert string luapat to determine if the char is a valid part of a region or if the region should end 1 char earlier
+local M = {
+	false_end_in_insert = '[, ]',
+}
 
 ---@class manipulator.BufRange
 ---@field range Range4 0-indexed range with the buf number
@@ -42,6 +45,34 @@ do -- ### Comparators
 	---@return integer # <0 if a<b, 0 if a==b, >0 if a>b
 	function M.cmpPoint(a, b) return a[1] == b[1] and a[2] - b[2] or a[1] - b[1] end
 
+	---@param a Range
+	---@param b Range
+	---@return Range a with added values from b
+	function M.addRange(a, b)
+		for i, v in ipairs(a) do
+			if b[i] then
+				a[i] = v + b[i]
+			else
+				a[i] = nil
+			end
+		end
+		return a
+	end
+
+	---@param a Range
+	---@param b Range
+	---@return Range a with subtracted values from b
+	function M.subRange(a, b)
+		for i, v in ipairs(a) do
+			if b[i] then
+				a[i] = v - b[i]
+			else
+				a[i] = nil
+			end
+		end
+		return a
+	end
+
 	---@param a Range4
 	---@param b Range2|Range4
 	---@return integer # comparison of the starts
@@ -58,6 +89,31 @@ do -- ### Comparators
 	function M.rangeContains(a, b)
 		local r1, r2 = M.cmpRange(a, b)
 		return r1 <= 0 and r2 >= 0 and (r1 == 0 and r2 == 0 and 0 or 1) or -1
+	end
+
+	---@param r Range4
+	---@param p Range2
+	---@param tolerate_end_by_1 boolean if point can be directly after the end of the range
+	---@return Range2? position to the closer edge, or `nil` if point is more than 1 col outside range
+	---@return boolean? end if the closer edge is the end of the range
+	function M.posInRange(r, p, tolerate_end_by_1)
+		if
+			M.cmpPoint(p, r) < 0 or M.cmpPoint(p, { r[3], r[4] + (tolerate_end_by_1 and 1 or 0) }) > 0
+		then
+			return
+		end
+
+		if p[1] ~= r[3] or p[2] - r[4] < 0 then -- if not very near the end default to start
+			return {
+				p[1] - r[1],
+				p[2] - r[2],
+			}, false
+		else
+			return {
+				p[1] - r[3],
+				p[2] - r[4],
+			}, true
+		end
 	end
 end
 
@@ -81,15 +137,38 @@ do -- ### Current state helpers
 		return lines
 	end
 
+	--- Shift the end by -1 if EOL is selected or the char falls under `pattern`
+	---@param point Range2 0-indexed
+	---@param pattern? string|false luapat testing if the char is extra (default: `M.false_end_in_insert`)
+	---   - trims only EOL if set to `false`
+	---@return Range2 point
+	function M.fix_end(buf, point, pattern)
+		if point[2] == 0 then return point end
+		local char = vim.api
+			.nvim_buf_get_lines(buf, point[1], point[1] + 1, true)[1]
+			:sub(point[2] + 1, point[2] + 1)
+		if
+			char == ''
+			or (
+				pattern ~= false
+				and char:match(type(pattern) == 'string' and pattern or M.false_end_in_insert)
+			)
+		then
+			point[2] = point[2] - 1
+		end
+		return point
+	end
+
 	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
 	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
 
 	---@param v_modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
+	---@param fix_end? boolean if end in select mode should be checked for by-1 offset (default: true)
 	---@return Range4? 0-indexed
 	---@return boolean? leading if cursor was at the beginning of the current selection
-	function M.get_visual(v_modes)
-		v_modes = type(v_modes) == 'table' or { v = true, V = true, ['\022'] = true }
-		local mode = vim.fn.mode():sub(1, 1) -- we don't need full details on the mode
+	function M.current_visual(v_modes, fix_end)
+		v_modes = type(v_modes) == 'table' or { v = true, V = true, ['\022'] = true, s = true }
+		local mode = vim.fn.mode()
 		if not v_modes[mode] then return end
 
 		local from, to = vim.fn.getpos 'v', vim.fn.getpos '.'
@@ -105,6 +184,11 @@ do -- ### Current state helpers
 			to[3] = #vim.api.nvim_buf_get_lines(0, to[2] - 1, to[2], true)[1] + 1
 		end
 
+		if fix_end ~= false then -- all visual modes can select the EOL
+			local tmp = M.fix_end(0, { to[2] - 1, to[3] - 1 }, mode == 's')
+			to[3] = tmp[2] + 1
+		end
+
 		return {
 			from[2] - 1,
 			from[3] - 1,
@@ -114,8 +198,9 @@ do -- ### Current state helpers
 	end
 
 	---@param mouse? boolean if mouse or cursor position should be retrieved
+	---@param fix_end? boolean if end in insert mode should be checked for by-1 offset (default: true)
 	---@return manipulator.BufRange
-	function M.current_point(mouse)
+	function M.current_point(mouse, fix_end)
 		local ret
 		if mouse then
 			local m = vim.fn.getmousepos()
@@ -127,6 +212,10 @@ do -- ### Current state helpers
 		else
 			ret = { buf = 0, range = vim.api.nvim_win_get_cursor(0) }
 			ret.range[1] = ret.range[1] - 1
+			local mode = vim.fn.mode()
+			if mode ~= 'n' and fix_end ~= false then
+				M.fix_end(ret.buf, ret.range, mode == 'i' or mode == 's')
+			end
 		end
 
 		ret.range[3] = ret.range[1]

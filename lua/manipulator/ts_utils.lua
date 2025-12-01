@@ -155,12 +155,13 @@ function M.get_child(opts, node, ltree, idx)
 	return find_valid_child(opts, child, ltree, idx, node)
 end
 
----@class manipulator.TSRegion.RawOpts: manipulator.TSRegion.Opts
+---@class manipulator.TSRegion.GraphOpts: manipulator.TSRegion.Opts
 ---@field allow_child? boolean if children of the current node can be returned
 ---@field start_point? Range2 0-indexed, from where to start looking for nodes
+---@field compare_end? boolean should we look in direction by end of node or start
 -- ---@field match string scheme query to match
 
----@type fun(opts:manipulator.TSRegion.RawOpts, node:TSNode,
+---@type fun(opts:manipulator.TSRegion.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
 function M.next_in_graph(opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
@@ -190,7 +191,7 @@ function M.next_in_graph(opts, node, ltree)
 	return node, ltree
 end
 
----@type fun(opts:manipulator.TSRegion.RawOpts, node:TSNode,
+---@type fun(opts:manipulator.TSRegion.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
 function M.prev_in_graph(opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
