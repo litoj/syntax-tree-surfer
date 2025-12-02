@@ -1,6 +1,5 @@
 local UTILS = require 'manipulator.utils'
 local RANGE_UTILS = require 'manipulator.range_utils'
-local RANGE_ACTIONS = require 'manipulator.range_actions'
 local Batch = require 'manipulator.batch'
 
 ---@class manipulator.Region
@@ -41,8 +40,8 @@ function Region:__tostring() return self:get_lines(true)[1] or 'NilRegion' end
 
 ---@return Range4 0-indexed range
 function Region:range0()
-	return self.range and UTILS.tbl_inner_extend('keep', {}, self.range)
-		or (self[1] and { self[1], self[2], self[3], self[4] })
+	local range = self[1] and self or self.range
+	return range and { range[1], range[2], range[3], range[4] }
 		or RANGE_UTILS.offset(self:range1(), -1)
 end
 
@@ -80,11 +79,25 @@ function Region:to_batch(x, ...)
 	return Batch.from(self, x, ...)
 end
 
----@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: false)
+---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: true)
+---@return string[]
 function Region:get_lines(cut_to_range)
-	return self.text and vim.split(self.text, '\n')
-		or self.lines
-		or RANGE_UTILS.get_lines(self, cut_to_range)
+	local lines = self.text and vim.split(self.text, '\n') or self.lines
+	if lines then return lines end
+	local buf, range = RANGE_UTILS.decompose(self)
+
+	lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
+
+	if cut_to_range ~= false then
+		if #lines == 1 then
+			lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
+		else
+			lines[1] = lines[1]:sub(range[2] + 1)
+			lines[#lines] = lines[#lines]:sub(1, range[4] + 1)
+		end
+	end
+
+	return lines
 end
 
 ---@return string # Concatenated lines of the region
@@ -105,42 +118,82 @@ end
 ---@param action? 'a'|'r' `vim.fn.setqflist` action to perform - append or replace (default: 'a')
 function Region:add_to_qf(action) vim.fn.setqflist({ self:as_qf_item() }, action or 'a') end
 
-Region.highlight = RANGE_ACTIONS.highlight
-Region.mark = RANGE_ACTIONS.mark
+do
+	local hl_ns = vim.api.nvim_create_namespace 'manipulator_hl'
+
+	--- Highlight or remove highlighting from given range (run on NilRegion to clear the whole buffer)
+	---@param group? string|false highlight group name or false to clear (default: 'IncSearch')
+	function Region:highlight(group)
+		local buf, range = RANGE_UTILS.decompose(self)
+		if group == false then
+			vim.api.nvim_buf_clear_namespace(buf, hl_ns, range[1] or 0, range[3] and range[3] + 1 or -1)
+			return
+		elseif not range[1] then
+			vim.notify('Cannot highlight Nil', vim.log.levels.INFO)
+			return
+		end
+
+		group = group or 'IncSearch'
+		vim.hl.range(buf, hl_ns, group, { range[1], range[2] }, { range[3], range[4] + 1 })
+	end
+end
+
+---@param char string character for the mark
+function Region:mark(char)
+	local buf, range = RANGE_UTILS.decompose(self)
+	vim.api.nvim_buf_set_mark(buf, char, range[1] + 1, range[2], {})
+end
 
 --- Jump to the start (or end, if {_end}) of the region.
 ---@param end_? boolean
 function Region:jump(end_)
-	RANGE_ACTIONS.jump { buf = self.buf, range = end_ and self:end_() or self:start() }
+	RANGE_UTILS.jump { buf = self.buf, range = end_ and self:end_() or self:start() }
 end
 
 ---@class manipulator.Region.select.Opts
 ---@field allow_grow? boolean if true, add to current visual selection (default: false)
----@field mode? 'v'|'V' which mode to enter for selection (default: 'v')
+---@field linewise? boolean (default:false)
+---@field return_to_insert? boolean if coming from insert mode should we return to it after ending the selection (like `<C-o>v`) (default: false)
+---@field allow_select_mode? boolean if coming from insert mode should we enter select or visual mode. Cannot be combined with `return_to_insert` (default: false=visual mode only)
+---@field end_? boolean if the cursor should jump to the end of the selection (applied only when not in visual mode already) (default: true)
 
---- Select node in visual mode
+--- Select node in visual/select mode.
 ---@param opts? manipulator.Region.select.Opts
 function Region:select(opts)
 	opts = opts or {}
-	local range = self:range0()
+	local buf, range = RANGE_UTILS.decompose(self, true)
+	if buf ~= vim.api.nvim_get_current_buf() then RANGE_UTILS.jump(self) end
 
-	local visual = RANGE_UTILS.current_visual()
-	if opts.allow_grow then
-		if visual then
-			range[1] = math.min(range[1], visual[1])
-			range[2] = math.min(range[2], visual[2])
-			range[3] = math.max(range[3], visual[3])
-			range[4] = math.max(range[4], visual[4])
-		end
+	local visual, leading = RANGE_UTILS.current_visual()
+	if visual and opts.allow_grow then
+		range[1] = math.min(range[1], visual[1])
+		range[2] = math.min(range[2], visual[2])
+		range[3] = math.max(range[3], visual[3])
+		range[4] = math.max(range[4], visual[4])
 	end
 
-	-- in nvim line is 1-indexed, col is 0-indexed
-	RANGE_ACTIONS.set_visual(range, opts.mode)
+	local c_mode = vim.fn.mode()
+	local t_mode = opts.linewise and 'V' or 'v'
+	if c_mode == 'i' then
+		if not opts.allow_select_mode then vim.cmd.stopinsert() end -- updates in the next tick
+		range[4] = range[4] + 1 -- fix insert shortening moved cursor in this tick
+		if opts.return_to_insert then vim.cmd { cmd = 'normal', bang = true, args = { '\015' } } end
+		vim.cmd { cmd = 'normal', bang = true, args = { t_mode } }
+	elseif c_mode ~= t_mode then
+		vim.cmd { cmd = 'normal', bang = true, args = { '\027' } }
+		vim.cmd { cmd = 'normal', bang = true, args = { t_mode } }
+	end
+
+	-- vim line is 1-indexed, col is 0-indexed
+	vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
+	vim.cmd.normal 'o'
+	vim.api.nvim_win_set_cursor(0, { range[3] + 1, range[4] })
+	if leading or (not visual and opts.end_ ~= false) then vim.cmd.normal 'o' end
 end
 
 ---@class manipulator.Region.paste.Opts
 ---@field dst? manipulator.RangeType where to put the text relative to (default: self)
----@field text? string text to paste (default: self:get_text())
+---@field text? string text to paste (default: `self:get_text()`)
 ---@field mode 'before'|'after'|'over' method of modifying the dst range text content, doesn't support 'swap' mode
 ---@field linewise? boolean
 
@@ -154,7 +207,6 @@ function Region:paste(opts)
 		return
 	end
 
-	local text = opts.text
 	if opts.linewise then
 		if opts.mode == 'after' then range[1] = range[3] + 1 end
 		range[3] = range[1]
@@ -254,17 +306,17 @@ function Region:swap(opts)
 			local n_start = c_at_src and drange or srange
 			local n_buf = c_at_src and dbuf or sbuf
 			if v_pos then
-				RANGE_ACTIONS.jump(
+				RANGE_UTILS.jump(
 					RANGE_UTILS.addRange(RANGE_UTILS.subRange({ t_range[3], t_range[4] }, t_range), n_start)
 				)
 				vim.cmd.normal 'o'
 			end
-			RANGE_ACTIONS.jump({ buf = n_buf, range = n_start }, false)
+			RANGE_UTILS.jump({ buf = n_buf, range = n_start }, false)
 		end
 	else
 		-- always jump to the tracked region to calculate the shift afterwards
 		if opts.cursor_with then
-			RANGE_ACTIONS.jump({ buf = sbuf, range = c_at_src and drange or srange }, false)
+			RANGE_UTILS.jump({ buf = sbuf, range = c_at_src and drange or srange }, false)
 		end
 		vim.lsp.util.apply_text_edits({ s_edit, d_edit }, sbuf, 'utf-8')
 
@@ -280,10 +332,10 @@ function Region:swap(opts)
 			)
 
 			if v_pos then
-				RANGE_ACTIONS.jump(RANGE_UTILS.addRange(v_pos, v_end and n_end or n_start), false)
+				RANGE_UTILS.jump(RANGE_UTILS.addRange(v_pos, v_end and n_end or n_start), false)
 				vim.cmd.normal 'o'
 			end
-			RANGE_ACTIONS.jump(RANGE_UTILS.addRange(c_pos, c_end and n_end or n_start), false)
+			RANGE_UTILS.jump(RANGE_UTILS.addRange(c_pos, c_end and n_end or n_start), false)
 		end
 	end
 end
@@ -302,7 +354,7 @@ do
 	--- Move the node to a given position
 	---@param opts? manipulator.Region.queue_or_run.Opts included action options used only on run call
 	---@return manipulator.Region? self returns itself if it was the first to be selected; nil, if selection was removed
-	function Region:queue_or_run(opts) -- TODO: add linewise region info
+	function Region:queue_or_run(opts)
 		opts = opts or {} -- TODO: make this into inheritable settings
 		if opts.highlight == nil then opts.highlight = 'IncSearch' end
 		opts.group = opts.group or opts.highlight
@@ -323,7 +375,7 @@ do
 				queued_map[opts.group] = nil
 				active:highlight(false)
 				vim.notify(
-					self.buf and 'Unselected' or 'Cannot run queued action on nil',
+					self.buf and 'Unselected' or 'Cannot run queued action on Nil',
 					vim.log.levels.WARN
 				)
 				return
@@ -357,10 +409,11 @@ do -- ### Wrapper for nil matches
 	local NilRegion = { range = {} }
 	function NilRegion:clone() return self end -- nil is only one
 	function NilRegion:__tostring() return 'Nil' end
-	-- allow move() to deselect the group and collect() to return an empty Batch
-	local pass_through = { Nil = true, move = true, highlight = true, collect = true }
+	-- allow queue_or_run() to deselect the group and collect() to return an empty Batch
+	local passthrough =
+		{ Nil = true, highlight = true, collect = true, swap = true, queue_or_run = true }
 	function NilRegion:__index(key)
-		if pass_through[key] then return Region[key] end
+		if passthrough[key] then return Region[key] end
 		return function() vim.notify('Cannot ' .. key .. ' Nil') end
 	end
 

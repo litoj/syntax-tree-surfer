@@ -37,6 +37,7 @@ M.default_config = {
 		fzf_resolve_timeout = 100,
 		callback = false,
 	},
+
 	recursive_limit = 1000,
 
 	presets = {},
@@ -45,9 +46,8 @@ M.default_config = {
 local inheritable_keys = { pick = true }
 
 M.config = M.default_config
-M.config.presets.default = M.default_config
+M.config.presets.default = M.config
 UTILS.prepare_presets(M.config, inheritable_keys)
-M.config.presets.config = M.config
 
 ---@private
 ---@param opts manipulator.Batch.Opts
@@ -307,8 +307,9 @@ end
 ---@param ... manipulator.Batch.Action item method sequences to apply and collect the result of
 ---@return manipulator.Batch
 function M.from(src, ...)
+	if not src or src == src.Nil then return Batch:new(M.config, {}, src and src.Nil or false) end
 	local actions = { ... }
-	if type(actions[1]) == 'table' and actions[1][1] then actions = actions[1] end
+	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
 	local acc = {}
 	local Nil = src.Nil
 
@@ -325,6 +326,7 @@ end
 ---@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
 ---@return manipulator.Batch
 function M.from_recursive(src, limit_or_fn, ...)
+	if not src or src == src.Nil then return Batch:new(M.config, {}, src and src.Nil or false) end
 	local limit = type(limit_or_fn) == 'number' and limit_or_fn or M.config.recursive_limit
 	local actions = type(limit_or_fn) ~= 'number' and { limit_or_fn, ... } or { ... }
 

@@ -93,14 +93,15 @@ do -- ### opts helpers
 	---@param t1 table
 	---@param t2 table
 	---@param depth? integer|boolean number of levels to extend, true for infinite (default: 0)
-	---@param deep_copy? boolean if t2 values should be cloned or can be used directly
+	---@param deep_copy? boolean|'noref' if t2 values should be cloned or can be used directly
+	---   - 'noref' sets the `noref` param of `vim.deepcopy()` to `true`
 	---@return table t1
 	function M.tbl_inner_extend(mode, t1, t2, depth, deep_copy)
 		if t1 == t2 then return t1 end
 		if not depth then
 			depth = 0
 		elseif depth == true then
-			depth = math.huge()
+			depth = math.huge
 		end
 
 		for k, v2 in pairs(t2) do
@@ -111,42 +112,60 @@ do -- ### opts helpers
 				if depth > 0 and type(v1) == 'table' and type(v2) == 'table' then
 					t1[k] = M.tbl_inner_extend(mode, v1, v2, depth - 1, deep_copy)
 				elseif v1 == nil or mode == 'force' then
-					t1[k] = type(v2) == 'table' and deep_copy and vim.deepcopy(v2) or v2
+					t1[k] = type(v2) == 'table' and deep_copy and vim.deepcopy(v2, deep_copy == 'noref') or v2
 				end
 			end
 		end
 		return t1
 	end
 
-	---@class manipulator.Enabler: {[string]: boolean}, {[integer]: string} map or list of enabled/disabled values (state in a list is the opposite of ['*'])
-	---@field ['*']? boolean
-	---@field inherit? boolean should we inherit from the parent config (default: false)
-
-	local enabler_meta = {
-		__index = function(self) return rawget(self, '*') end,
-	}
-
-	--- Setup automatic fallback evaluation + transform list into a map of enabled values
-	---
-	---@generic K: string
-	---@param enabler {[K]:boolean}
-	---@return manipulator.Enabler<K> enabler with added metatable for resolving default values to '*'
-	function M.makeEnabler(enabler)
-		if enabler[1] then
-			local val = not enabler['*']
-			for i, v in ipairs(enabler) do
-				enabler[i] = nil
-				enabler[v] = val
-			end
-		elseif getmetatable(enabler) then
-			return enabler
-		end
-
-		return setmetatable(enabler, enabler_meta)
-	end
-
 	---@class manipulator.Inheritable
 	---@field inherit? boolean|string should inherit from persistent opts, or a preset (default: true for opts, false for table keys)
+
+	do
+		---@class manipulator.Enabler map or list of enabled/disabled values (state in a list is the opposite of ['*'])
+		---@field [string] boolean
+		---@field [integer] string
+		---@field ['*']? boolean
+		---@field inherit? boolean should we inherit from the parent config (default: false)
+		---@field matchers? string[] list of lua patterns for more complex filtering
+
+		local enabler_meta = {
+			__index = function(self, key)
+				if type(key) ~= 'string' then return nil end
+				if rawget(self, 'matchers') then
+					for _, m in ipairs(self.matchers) do
+						if key:match(m) then return not rawget(self, '*') end
+					end
+				end
+				return rawget(self, '*')
+			end,
+		}
+
+		--- Setup automatic fallback evaluation + transform list into a map of enabled values
+		---@generic K: string
+		---@param enabler manipulator.Enabler
+		---@param luapat_detect? string lua pattern to detect list items that are luapats, not str
+		---@return manipulator.Enabler<K> enabler with added metatable for resolving default values to '*'
+		function M.activate_enabler(enabler, luapat_detect)
+			if enabler[1] then
+				local val = not enabler['*']
+				for i, key in ipairs(enabler) do
+					enabler[i] = nil
+					if luapat_detect and key:match(luapat_detect) then -- luapat expression
+						if not enabler.matchers then enabler.matchers = {} end
+						enabler.matchers[#enabler.matchers + 1] = key
+					elseif not enabler[key] then
+						enabler[key] = val
+					end
+				end
+			elseif getmetatable(enabler) then
+				return enabler
+			end
+
+			return setmetatable(enabler, enabler_meta)
+		end
+	end
 
 	--- Expand opts to include all inherited features from presets etc.
 	--- Inheritance is controlled by `.inherit` in {opts} or opt keys from {inheritable_keys}.
@@ -189,6 +208,7 @@ do -- ### opts helpers
 			end
 		end
 
+		presets[true] = nil
 		config.presets = super and presets or nil
 		return config
 	end

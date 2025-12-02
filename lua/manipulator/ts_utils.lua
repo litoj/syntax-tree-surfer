@@ -85,12 +85,13 @@ function M.get_direct_child(opts, node, ltree, idx)
 
 	if cnt == 0 then -- search in the subtrees
 		local r = { node:range() } -- shrink the range to fit the subtree root
-		r[2] = r[2] + 1 -- TODO: what happens when we're at the last column (md: ```lang)
+		r[2] = r[2] + 1
 		if r[4] > 0 then r[4] = r[4] - 1 end
 
 		local otree = ltree
 		ltree = ltree:language_for_range(r)
 		if ltree and ltree ~= otree and opts.langs and opts.langs[ltree:lang()] then
+			-- TODO: why does this not go into markdown inline
 			node = ltree:named_node_for_range(r) ---@type TSNode get the root of the tree
 
 			-- ensure type gets filtered (max 1 root with the same size exists)
@@ -157,18 +158,24 @@ end
 
 ---@class manipulator.TSRegion.GraphOpts: manipulator.TSRegion.Opts
 ---@field allow_child? boolean if children of the current node can be returned
----@field start_point? Range2 0-indexed, from where to start looking for nodes
+---@field start_point? 'cursor'|Range2 0-indexed, from where to start looking for nodes
 ---@field compare_end? boolean should we look in direction by end of node or start
 -- ---@field match string scheme query to match
+
+local function start_point_to_byte(sp, fallback)
+	if sp == 'cursor' then sp = RANGE_UTILS.current_point().range end
+	return sp and (vim.fn.line2byte(sp[1] + 1) - 1 + sp[2]) or fallback
+end
 
 ---@type fun(opts:manipulator.TSRegion.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
 function M.next_in_graph(opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
 	local cmp_method = opts.compare_end and node.end_ or node.start
-
-	local base_point = opts.allow_child and select(3, node:start()) or select(3, node:end_())
-	if opts.start_point and opts.start_point > base_point then base_point = opts.start_point end
+	local base_point = math.max(
+		opts.allow_child and select(3, node:start()) or select(3, node:end_()),
+		start_point_to_byte(opts.start_point, -1)
+	)
 	local ok_range = function(node) return select(3, cmp_method(node)) > base_point end
 
 	local tmp, tmp_tree
@@ -196,9 +203,10 @@ end
 function M.prev_in_graph(opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
 	local cmp_method = opts.compare_end and node.end_ or node.start
-
-	local base_point = opts.allow_child and select(3, node:end_()) or select(3, node:start())
-	if opts.start_point and opts.start_point < base_point then base_point = opts.start_point end
+	local base_point = math.min(
+		opts.allow_child and select(3, node:end_()) or select(3, node:start()),
+		start_point_to_byte(opts.start_point, math.huge)
+	)
 	local ok_range = function(node) return select(3, cmp_method(node)) < base_point end
 
 	local tmp, tmp_tree = nil, ltree

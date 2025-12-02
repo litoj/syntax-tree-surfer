@@ -33,17 +33,20 @@ TSRegion.__index = TSRegion
 ---@field class manipulator.TSRegion
 local M = UTILS.static_wrap_for_oop(TSRegion, {})
 
----@type manipulator.TSRegion.Config
+---@class manipulator.TSRegion.module.Config: manipulator.TSRegion.Config
+---@field prefer_ft_preset? boolean should the base preset for all nodes be based on filetype-named presets (extending the config) or just use the config alone
 M.default_config = {
 	langs = { ['*'] = true, 'luap', 'printf', 'regex' },
 	types = {
 		['*'] = true,
-		-- lua
-		'comment_content',
+		-- coding languages can appear in markdown blocks -> all pg langs directly in the defaults
 		'string_content',
+		'comment_content',
+
+		-- lua
 		'documentation',
-		'chunk',
 		'block',
+		'chunk',
 		'variable_list',
 		'expression_list',
 		-- 'dot_index_expression', -- = field paths
@@ -58,7 +61,8 @@ M.default_config = {
 	next_in_graph = { allow_child = true },
 	prev_in_graph = { allow_parent = true },
 
-	use_ft_preset = true,
+	prefer_ft_preset = true,
+
 	presets = {
 		path = {
 			actions = {
@@ -73,11 +77,24 @@ M.default_config = {
 		},
 
 		tex = {
-			inherit = 'config',
+			inherit = 'default',
 			types = {
+				inherit = true,
 				['*'] = true,
 				'word',
 				'text',
+			},
+		},
+		markdown = {
+			inherit = 'default',
+			types = {
+				inherit = true,
+				['*'] = true,
+				'list_item',
+				'list_marker_minus',
+				'inline',
+				'block_continuation',
+				'delimiter$',
 			},
 		},
 	},
@@ -97,11 +114,29 @@ local inheritable_keys = {
 	sibling = true,
 }
 
----@type manipulator.TSRegion.Config
-M.config = M.default_config
-M.config.presets.config = M.config
-UTILS.prepare_presets(M.config, inheritable_keys)
-M.config.presets.default = M.default_config
+local function with_setup_enablers(opts)
+	UTILS.activate_enabler(opts.types, '[^a-z_]')
+	if type(opts.langs) == 'table' then UTILS.activate_enabler(opts.langs) end
+	return opts
+end
+
+do
+	-- TODO: this should be the workflow of every setup
+	---@type manipulator.TSRegion.module.Config
+	M.config = UTILS.tbl_inner_extend('keep', {}, M.default_config, true, 'noref')
+	M.config.presets.default = M.config
+	UTILS.prepare_presets(M.config, inheritable_keys)
+	with_setup_enablers(M.config) -- minimize repeated work of converting types list to a map
+	-- TODO: with real setup user can give config that is based on presets ->
+	-- after preset relation resolution also expand the config with 'default' if inherit is still true
+end
+
+local function get_base_config(expanded, buf)
+	local bp = M.config.presets[vim.bo[buf].ft]
+	-- base config is always fully expanded, because it doesn't inherit
+	if not M.config.prefer_ft_preset or not bp then return M.config end
+	return expanded and UTILS.expand_config(M.config.presets, M.config, bp, inheritable_keys) or bp
+end
 
 --- Resolve option inheritance etc. and set automatic enabler tables index fallbacks.
 ---@generic S: manipulator.TSRegion.Config
@@ -109,16 +144,12 @@ M.config.presets.default = M.default_config
 ---@param config `S`|string user config to get expanded - updated inside
 ---@return S cfg expanded with all default config
 local function expand_config(orig, config)
-	config = UTILS.expand_config(
+	return with_setup_enablers(UTILS.expand_config(
 		orig.presets,
-		M.config == orig and M.config.use_ft_preset and M.config.presets[vim.bo.ft] or orig,
+		M.config == orig and get_base_config(false, 0) or orig, -- FIXME: we rely on the active buffer
 		config,
 		inheritable_keys
-	)
-
-	UTILS.makeEnabler(config.types)
-	if type(config.langs) == 'table' then UTILS.makeEnabler(config.langs) end
-	return config
+	))
 end
 
 ---@generic O: manipulator.TSRegion.Opts
@@ -128,10 +159,7 @@ end
 ---@return O # opts expanded for the given method
 local function action_opts(config, opts, method)
 	opts = UTILS.get_opts_for_action(config, opts, method, inheritable_keys)
-
-	UTILS.makeEnabler(opts.types)
-	if type(opts.langs) == 'table' then UTILS.makeEnabler(opts.langs) end
-	return opts
+	return with_setup_enablers(opts)
 end
 
 --- Create a new language-tree node wrapper.
@@ -141,12 +169,14 @@ function TSRegion:new(opts, node, ltree)
 	-- method opts also apply to the resul node
 	-- always select the top node of the same range and valid type
 	node, ltree = TS_UTILS.top_identity(opts, node, ltree or self.ltree)
-	if not node then return opts.nil_wrap and self.Nil end
+	if not node or not ltree then return opts.nil_wrap and self.Nil end
 
-	return TSRegion.super.new(
-		TSRegion, ---@diagnostic disable-next-line: need-check-nil
-		{ buf = ltree._source, node = node, ltree = ltree, config = self.config or M.config }
-	)
+	return TSRegion.super.new(TSRegion, {
+		buf = ltree._source,
+		node = node,
+		ltree = ltree,
+		config = self.config or get_base_config(true, ltree._source),
+	})
 end
 
 function TSRegion:range1() return { NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
@@ -168,7 +198,7 @@ function TSRegion:with(config, inplace)
 	---@diagnostic disable-next-line: inject-field
 	config = expand_config(self.config, config)
 
-	local ret = inplace and self or self:new(config, self.node, self.tree)
+	local ret = inplace and self or self:new(config, self.node)
 	ret.config = config
 	return ret
 end
@@ -377,7 +407,7 @@ end
 ---@class manipulator.TSRegion.module.get.Opts: manipulator.TSRegion.Config
 ---@field buf? integer Buffer number (default: 0)
 ---@field range Range4 0-indexed range: {start_row, start_col, end_row, end_col}
----@field persistent? boolean should opts be saved as the default for the node (default: true)
+---@field persistent? boolean should opts be saved as the default for the node (default: false)
 
 --- Get a node covering given range. (end-column-exclusive -> use +1)
 ---@param opts manipulator.TSRegion.module.get.Opts
@@ -394,18 +424,18 @@ function M.get(opts)
 	if opts.langs then ltree = ltree:language_for_range(range) end
 
 	local ret = TSRegion:new(opts, ltree:named_node_for_range(range), ltree)
-	return ret and opts.persistent ~= false and ret:with(opts, true) or ret
+	return ret and opts.persistent and ret:with(opts, true) or ret
 end
 
---- Get all matching nodes node covering given range. (end-column-exclusive -> use +1)
----@param opts manipulator.TSRegion.module.get.Opts by default sets also the node config
+--- Get all matching nodes spanning the entire buffer.
+---@param opts manipulator.TSRegion.module.get.Opts|{range?:nil}
 ---@return manipulator.Batch
 function M.get_all(opts)
 	opts = expand_config(M.config, opts)
 
 	local ltree = vim.treesitter.get_parser(opts.buf or 0)
 	opts.buf = nil
-	if not ltree then return Batch:new({}, TSRegion.Nil) end
+	if not ltree then return Batch:new({}, TSRegion.Nil, TSRegion.Nil) end
 
 	local types = opts.types
 	local nodes = {} ---@type manipulator.TSRegion[]
@@ -425,9 +455,8 @@ function M.get_all(opts)
 			if node and types[node:type()] then
 				local tsregion = TSRegion:new(opts, node, ltree)
 				-- ensure different ranges from the previous node (in parent->child relations)
-				if tsregion.node and #nodes == 0 or tsregion.node ~= nodes[#nodes].node then
-					if opts.persistent ~= false then tsregion = tsregion:with(opts, true) end
-					nodes[#nodes + 1] = tsregion
+				if tsregion and tsregion.node and #nodes == 0 or tsregion.node ~= nodes[#nodes].node then
+					nodes[#nodes + 1] = opts.persistent and tsregion:with(opts, true) or tsregion
 				end
 			end
 		end

@@ -118,25 +118,6 @@ do -- ### Comparators
 end
 
 do -- ### Current state helpers
-	---@param range manipulator.RangeType 0-indexed range
-	---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: false)
-	function M.get_lines(range, cut_to_range)
-		local buf
-		buf, range = M.decompose(range)
-		local lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
-
-		if cut_to_range then
-			if #lines == 1 then
-				lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
-			else
-				lines[1] = lines[1]:sub(range[2] + 1)
-				lines[#lines] = lines[#lines]:sub(1, range[4] + 1)
-			end
-		end
-
-		return lines
-	end
-
 	--- Shift the end by -1 if EOL is selected or the char falls under `pattern`
 	---@param point Range2 0-indexed
 	---@param pattern? string|false luapat testing if the char is extra (default: `M.false_end_in_insert`)
@@ -157,6 +138,23 @@ do -- ### Current state helpers
 			point[2] = point[2] - 1
 		end
 		return point
+	end
+
+	---@param point manipulator.RangeType 0-indexed point
+	---@param offset_insert? boolean if end in 's'/'i' mode should get extra +1 offset (default: true)
+	function M.jump(point, offset_insert)
+		local buf, range = M.decompose(point)
+		range = { range[1] + 1, range[2] }
+		local mode = vim.fn.mode()
+		if mode == 'i' or mode == 's' then
+			M.fix_end(buf, range) -- shifts back by one if at EOL
+			if offset_insert ~= false then
+				range[2] = range[2] + 1 -- we want insert to be after the selection -> add 1 to all cases
+			end
+		end
+
+		vim.api.nvim_win_set_buf(0, buf)
+		vim.api.nvim_win_set_cursor(0, range)
 	end
 
 	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
