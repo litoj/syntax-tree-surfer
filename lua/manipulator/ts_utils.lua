@@ -90,8 +90,12 @@ function M.get_direct_child(opts, node, ltree, idx)
 
 		local otree = ltree
 		ltree = ltree:language_for_range(r)
-		if ltree and ltree ~= otree and opts.langs and opts.langs[ltree:lang()] then
-			-- TODO: why does this not go into markdown inline
+		if ltree == otree then
+			-- md inline returns the same, yet different tree -> do not seek parent in the same ltree
+			local nnode = ltree:named_node_for_range(r) ---@type TSNode
+			if nnode == node then return end
+			return nnode, ltree
+		elseif ltree and opts.langs and opts.langs[ltree:lang()] then
 			node = ltree:named_node_for_range(r) ---@type TSNode get the root of the tree
 
 			-- ensure type gets filtered (max 1 root with the same size exists)

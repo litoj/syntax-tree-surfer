@@ -82,7 +82,7 @@ end
 ---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: true)
 ---@return string[]
 function Region:get_lines(cut_to_range)
-	local lines = self.text and vim.split(self.text, '\n') or self.lines
+	local lines = self.text and cut_to_range ~= false and vim.split(self.text, '\n') or self.lines
 	if lines then return lines end
 	local buf, range = RANGE_UTILS.decompose(self)
 
@@ -152,10 +152,11 @@ end
 
 ---@class manipulator.Region.select.Opts
 ---@field allow_grow? boolean if true, add to current visual selection (default: false)
----@field linewise? boolean (default:false)
+---@field linewise? boolean|'auto' 'auto' uses linewise mode if the range covers all line text (default: 'auto')
 ---@field return_to_insert? boolean if coming from insert mode should we return to it after ending the selection (like `<C-o>v`) (default: false)
 ---@field allow_select_mode? boolean if coming from insert mode should we enter select or visual mode. Cannot be combined with `return_to_insert` (default: false=visual mode only)
 ---@field end_? boolean if the cursor should jump to the end of the selection (applied only when not in visual mode already) (default: true)
+---@field rangemod? false|fun(self:manipulator.Region,range:Range4) modify the range before selecting (default: trims whitespace)
 
 --- Select node in visual/select mode.
 ---@param opts? manipulator.Region.select.Opts
@@ -163,6 +164,67 @@ function Region:select(opts)
 	opts = opts or {}
 	local buf, range = RANGE_UTILS.decompose(self, true)
 	if buf ~= vim.api.nvim_get_current_buf() then RANGE_UTILS.jump(self) end
+	if opts.rangemod == nil then
+		opts.rangemod = function()
+			local lines = self:get_lines(true)
+
+			-- Trim leading whitespace
+			local s_l = 1
+			local s_c = range[2]
+			while s_l <= #lines do
+				local line = lines[s_l]
+				local len = #(line:match '^%s*')
+
+				if len >= #line then
+					s_l = s_l + 1
+					s_c = 0
+				else
+					s_c = s_c + len
+					break
+				end
+			end
+
+			-- Trim trailing whitespace
+			local e_l = #lines
+			local e_c = range[4]
+			while e_l >= s_l do
+				local line = lines[e_l]
+				local len = #(line:match '%s*$')
+
+				if len >= #line then
+					e_l = e_l - 1
+					e_c = #lines[e_l]
+				else
+					e_c = e_c - len
+					break
+				end
+			end
+
+			if s_l <= e_l then -- update only if there is text left
+				range[1] = range[1] + s_l - 1
+				range[2] = s_c
+				range[3] = range[1] + e_l - 1
+				range[4] = e_c
+			end
+		end
+	end
+	if opts.rangemod then opts.rangemod(self, range) end
+	local t_mode = opts.linewise == nil and 'auto' or opts.linewise
+	if
+		t_mode == 'auto'
+		and not vim.api
+			.nvim_buf_get_lines(buf, range[1], range[1] + 1, true)[1]
+			:sub(1, range[2])
+			:match '%S'
+		and not vim.api
+			.nvim_buf_get_lines(buf, range[3], range[3] + 1, true)[1]
+			:sub(range[4] + 2)
+			:match '%S'
+	then
+		t_mode = 'V'
+	else
+		t_mode = 'v'
+	end
 
 	local visual, leading = RANGE_UTILS.current_visual()
 	if visual and opts.allow_grow then
@@ -173,7 +235,6 @@ function Region:select(opts)
 	end
 
 	local c_mode = vim.fn.mode()
-	local t_mode = opts.linewise and 'V' or 'v'
 	if c_mode == 'i' then
 		if not opts.allow_select_mode then vim.cmd.stopinsert() end -- updates in the next tick
 		range[4] = range[4] + 1 -- fix insert shortening moved cursor in this tick

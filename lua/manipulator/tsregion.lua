@@ -76,15 +76,6 @@ M.default_config = {
 			},
 		},
 
-		tex = {
-			inherit = 'default',
-			types = {
-				inherit = true,
-				['*'] = true,
-				'word',
-				'text',
-			},
-		},
 		markdown = {
 			inherit = 'default',
 			types = {
@@ -95,6 +86,16 @@ M.default_config = {
 				'inline',
 				'block_continuation',
 				'delimiter$',
+				'marker$'
+			},
+		},
+		tex = {
+			inherit = 'default',
+			types = {
+				inherit = true,
+				['*'] = true,
+				'word',
+				'text',
 			},
 		},
 	},
