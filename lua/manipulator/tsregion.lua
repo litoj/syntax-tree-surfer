@@ -65,14 +65,12 @@ M.default_config = {
 
 	presets = {
 		path = {
-			actions = {
-				sibling = { lvl_diff = 0, ancestor_diff = 2, fallback = true, types = { inherit = true } },
-				next = { max_ancestor = 4, inherit = 'sibling' },
-				prev = {
-					max_ancestor = 5,
-					prioritize = 'ancestor_diff',
-					inherit = 'sibling',
-				},
+			sibling = { lvl_diff = 0, ancestor_diff = 2, fallback = true, types = { inherit = true } },
+			next = { max_ancestor = 4, inherit = 'sibling' },
+			prev = {
+				max_ancestor = 5,
+				prioritize = 'ancestor_diff',
+				inherit = 'sibling',
 			},
 		},
 
