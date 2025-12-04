@@ -118,6 +118,26 @@ do -- ### Comparators
 end
 
 do -- ### Current state helpers
+	---@param region manipulator.RangeType
+	---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: true)
+	---@return string[]
+	function M.get_lines(region, cut_to_range)
+		local buf, range = M.decompose(region)
+
+		local lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
+
+		if cut_to_range ~= false then
+			if #lines == 1 then
+				lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
+			else
+				lines[1] = lines[1]:sub(range[2] + 1)
+				lines[#lines] = lines[#lines]:sub(1, range[4] + 1)
+			end
+		end
+
+		return lines
+	end
+
 	--- Shift the end by -1 if EOL is selected or the char falls under `pattern`
 	---@param point Range2 0-indexed
 	---@param pattern? string|false luapat testing if the char is extra (default: `M.false_end_in_insert`)
@@ -138,6 +158,57 @@ do -- ### Current state helpers
 			point[2] = point[2] - 1
 		end
 		return point
+	end
+
+	---@param region manipulator.RangeType
+	---@return Range4 # 0-indexed range of the region trimmed to the
+	function M.get_trimmed_range(region)
+		local _, range = M.decompose(region)
+		local lines = M.get_lines(region)
+
+		-- Trim leading whitespace
+		local s_l = 1
+		local s_c = range[2]
+		while s_l <= #lines do
+			local line = lines[s_l]
+			local len = #(line:match '^%s*')
+
+			if len >= #line then
+				s_l = s_l + 1
+				s_c = 0
+			else
+				s_c = s_c + len
+				break
+			end
+		end
+
+		-- Trim trailing whitespace
+		local e_l = #lines
+		local e_c = range[4]
+		while e_l >= s_l do
+			local line = lines[e_l]
+			local len = #(line:match '%s*$')
+
+			if len >= #line then
+				e_l = e_l - 1
+				e_c = #lines[e_l] - 1
+			else
+				e_c = e_c - len
+				break
+			end
+		end
+
+		if s_l <= e_l then -- update only if there is text left
+			range[1] = range[1] + s_l - 1
+			if s_l == e_l and (range[4] ~= e_c or range[3] ~= range[1] + e_l - 1) then
+				e_c = e_c + range[2] -- shift the col by the truncated amount
+			end
+			range[2] = s_c
+			range[3] = range[1] + e_l - 1
+			range[4] = e_c
+		end
+
+		return range
 	end
 
 	---@param point manipulator.RangeType 0-indexed point
@@ -177,22 +248,23 @@ do -- ### Current state helpers
 			from = tmp
 			leading = true
 		end
-		if mode == 'V' then
-			from[3] = 1
-			to[3] = #vim.api.nvim_buf_get_lines(0, to[2] - 1, to[2], true)[1] + 1
-		end
-
-		if fix_end ~= false then -- all visual modes can select the EOL
-			local tmp = M.fix_end(0, { to[2] - 1, to[3] - 1 }, mode == 's')
-			to[3] = tmp[2] + 1
-		end
-
-		return {
+		local range = {
 			from[2] - 1,
 			from[3] - 1,
 			to[2] - 1,
 			to[3] - 1,
-		}, leading
+		}
+		--[[ if mode == 'V' then
+			from[3] = 1
+			to[3] = #vim.api.nvim_buf_get_lines(0, to[2] - 1, to[2], true)[1] + 1
+		end ]]
+
+		if fix_end ~= false then -- all visual modes can select the EOL
+			local tmp = M.fix_end(0, { range[3], range[4] }, mode == 's')
+			range[4] = tmp[2]
+		end
+
+		return range, leading
 	end
 
 	---@param mouse? boolean if mouse or cursor position should be retrieved

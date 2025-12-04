@@ -81,12 +81,11 @@ M.default_config = {
 			types = {
 				inherit = true,
 				['*'] = true,
-				'list_item',
 				'list_marker_minus',
 				'inline',
 				'block_continuation',
 				'delimiter$',
-				'marker$'
+				'marker$',
 			},
 		},
 		tex = {
@@ -182,6 +181,10 @@ end
 
 function TSRegion:range1() return { NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
 
+function TSRegion:start() return { self.node:start() } end
+-- TODO: does the end shifted by one matter?, test the same for range0
+-- function TSRegion:end_() return { self.node:end_() } end
+
 ---@protected
 function TSRegion:__tostring()
 	return string.format(
@@ -232,12 +235,9 @@ end
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:closer_edge_child(opts)
 	local pos = vim.api.nvim_win_get_cursor(0)
-	pos[1] = pos[1] - 1
-	local range = { self.node:range() }
-	local avg = (range[1] + range[3]) / 2
-	-- diff in line pos
-	if avg ~= pos[1] then return self:child(opts, pos[1] > avg and -1 or 0) end
-	return self:child(opts, pos[2] > (range[2] + range[4]) / 2 and -1 or 0)
+	local pos_byte = vim.fn.line2byte(pos[1]) - 1 + pos[2]
+	local mid_byte = (select(3, self.node:start()) + select(3, self.node:end_())) / 2
+	return self:child(opts, pos_byte > mid_byte and -1 or 0)
 end
 
 --- Find the closest child to active position

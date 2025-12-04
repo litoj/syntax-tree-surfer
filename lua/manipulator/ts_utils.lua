@@ -83,19 +83,17 @@ end
 function M.get_direct_child(opts, node, ltree, idx)
 	local cnt = node:named_child_count()
 
+	-- NOTE: could include 1 for markdown block_continuation hiding next to inline block. However,
+	-- to get the md inline tree we'd have to know the position of the node in the inline node/ltree.
 	if cnt == 0 then -- search in the subtrees
 		local r = { node:range() } -- shrink the range to fit the subtree root
-		r[2] = r[2] + 1
-		if r[4] > 0 then r[4] = r[4] - 1 end
+		r[2] = r[2] + 1 -- luadoc doesn't include the third `-`, but the referring doc node does
+		-- NOTE: an inner parser ending one char earlier has not been found yet
+		-- if r[4] > 0 then r[4] = r[4] - 1 end
 
 		local otree = ltree
 		ltree = ltree:language_for_range(r)
-		if ltree == otree then
-			-- md inline returns the same, yet different tree -> do not seek parent in the same ltree
-			local nnode = ltree:named_node_for_range(r) ---@type TSNode
-			if nnode == node then return end
-			return nnode, ltree
-		elseif ltree and opts.langs and opts.langs[ltree:lang()] then
+		if ltree and ltree ~= otree and opts.langs and opts.langs[ltree:lang()] then
 			node = ltree:named_node_for_range(r) ---@type TSNode get the root of the tree
 
 			-- ensure type gets filtered (max 1 root with the same size exists)
@@ -111,7 +109,12 @@ end
 
 --- Depth-first search for a sub-node to the given side (first or last).
 local function find_valid_child(opts, node, ltree, idx, orig_parent)
-	local dir_fn = idx >= 0 and node.next_named_sibling or node.prev_named_sibling
+	if node:type() == 'inline' then -- XXX: partial fix for md inline
+		-- manages to match the inner inline node only if there is no `block_continuation`
+		node = ltree:named_node_for_range { node:range() }
+		if node:parent() then return end
+	end
+
 	node, ltree = M.get_direct_child(opts, node, ltree, idx)
 
 	while node do
@@ -119,7 +122,9 @@ local function find_valid_child(opts, node, ltree, idx, orig_parent)
 		local gchild, gtree = find_valid_child(opts, node, ltree, idx, orig_parent)
 		if M.valid_parented_node(opts, orig_parent, nil, gchild, true) then return gchild, gtree end
 
-		node = dir_fn(node)
+		-- NOTE: in md if sibling is from a different tree we have no way to
+		-- guess the range the sibling is in so we cannot test for a different ltree in that range
+		node = node[idx >= 0 and 'next_named_sibling' or 'prev_named_sibling'](node)
 	end
 end
 
