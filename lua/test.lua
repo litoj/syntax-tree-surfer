@@ -16,18 +16,6 @@ local methods = {
 
 	cp = get_node,
 }
--- TODO: add info/gtdefinition for types in info windows
--- TODO: matching by query syntax and catching into groups
--- TODO: make next/prev use the general next/prev traversal/type finder
--- TODO: finally solve the visual paste before/after offset by 1 for non-line copies
--- TODO: fix prev():jump()
--- TODO: ensure move() correctly shifts visual mode
--- TODO: ensure move() moves the cursor to stay at the same relative position to the original node
--- TODO: add selection modification/filter (include trailing comma etc.)
--- TODO: add wrapper for dot repeat
--- TODO: add wrapper for <num>gc<X> style mappings (snf = select next function, gnn = jump next node)...
--- TODO: consider adding optional highlight of further jumps (like filtered_jump)
--- TODO: siblings should just set defaults to locals not modify the opts
 
 -- Test function that uses visual selection or cursor position
 local function show_node_path()

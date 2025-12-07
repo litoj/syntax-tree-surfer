@@ -1,4 +1,17 @@
-# 🌳 syntax-tree-surfer 🌳🌊
+# manipulator.nvim
+
+## TODOS
+- update docs & license, separate repo from the original but include references
+- TODO: add info/gtdefinition for types in info windows
+- TODO: matching by query syntax and catching into groups
+- TODO: make next/prev use the general next/prev traversal/type finder
+- TODO: finally solve the visual paste before/after offset by 1 for non-line copies
+  - solved at least for manipulation with Regions here
+- TODO: add selection modification/filter (include trailing comma etc.)
+- TODO: add wrapper for dot repeat
+- TODO: add wrapper for <num>gc<X> style mappings (snf = select next function, gnn = jump next node)...
+- TODO: consider adding optional highlight of further jumps (like filtered_jump)
+- TODO: siblings should just set defaults to locals not modify the opts
 
 ### Syntax Tree Surfer is a plugin for Neovim that helps you surf through your document and move elements around using the nvim-treesitter API.
 
