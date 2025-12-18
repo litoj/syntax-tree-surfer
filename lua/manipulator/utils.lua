@@ -27,8 +27,7 @@ do -- ### file helpers
 	end
 
 	function M.rel_path(file_or_buf)
-		local path = type(file_or_buf) == 'string' and file_or_buf
-			or vim.api.nvim_buf_get_name(file_or_buf)
+		local path = type(file_or_buf) == 'string' and file_or_buf or vim.api.nvim_buf_get_name(file_or_buf)
 
 		local cwd = vim.uv.cwd()
 		if vim.startswith(path, cwd) then path = '.' .. path:sub(#cwd + 1) end
@@ -61,9 +60,7 @@ do -- ### module helpers
 	--- Ensure that the function at {key} gets the appropriate `self` object
 	function M.fn_self_wrap(fake_self, real_self, key)
 		-- pass on `self` only if it seems it's a method call on fake_self
-		local wrap = function(arg_self, ...)
-			return real_self[key](arg_self == fake_self and real_self or arg_self, ...)
-		end
+		local wrap = function(arg_self, ...) return real_self[key](arg_self == fake_self and real_self or arg_self, ...) end
 		rawset(fake_self, key, wrap)
 		return wrap
 	end
@@ -167,6 +164,9 @@ do -- ### opts helpers
 		end
 	end
 
+	---@alias manipulator.KeyInheritanceMap {[string]: boolean|string} which preset, if any, should the given option inherit from
+	--- - false for keys, true|string for action options (string to inherit from another key)
+
 	--- Expand opts to include all inherited features from presets etc.
 	--- Inheritance is controlled by `.inherit` in {opts} or opt keys from {inheritable_keys}.
 	--- - By default opts do inherit and opt keys as defined by {inheritable_keys}.
@@ -175,10 +175,9 @@ do -- ### opts helpers
 	---@param super O|{ [string]: O }|false base options, or false to not resolve the base yet
 	---@param presets { [string]: O|{[string]: O} } should contain ['super'] as the parent Opts
 	---@param config `O`|string
-	---@param inheritable_keys {[string]: boolean|string} keys with inheritance defaults
-	--- - false for keys, true|string for actions (string to inherit from another action)
+	---@param key_inheritance manipulator.KeyInheritanceMap defaults of key inheritance
 	---@return O|{ presets: { [string]: O|{[string]: O} } } opts
-	function M.expand_config(presets, super, config, inheritable_keys)
+	function M.expand_config(presets, super, config, key_inheritance)
 		presets[true] = super
 		config = type(config) ~= 'table' and { inherit = config } or config
 
@@ -193,7 +192,7 @@ do -- ### opts helpers
 			M.tbl_inner_extend('keep', config, preset)
 		end
 
-		for key, is_action in pairs(inheritable_keys) do
+		for key, is_action in pairs(key_inheritance) do
 			if not is_action then -- actions are resolved separately -> ignore them here
 				local val = config[key]
 				if type(val) == 'table' and rawget(val, 'inherit') then
@@ -213,11 +212,12 @@ do -- ### opts helpers
 		return config
 	end
 
-	--- Actions should be mapped to their defaults in {inheritable_keys}.
-	function M.expand_action(config, action, inheritable_keys)
+	--- Expand action inheritance chain - can inherit only from other actions, or its parent.
+	--- Actions should be mapped to their defaults in {key_inheritance}.
+	function M.expand_action(config, action, key_inheritance)
 		action = action or ''
 		local act_opts = config[action] or {}
-		local p_name = inheritable_keys[action]
+		local p_name = key_inheritance[action]
 		while act_opts.inherit ~= false do -- resolve presets for the action
 			if act_opts.inherit == nil then act_opts.inherit = p_name or true end
 
@@ -225,14 +225,14 @@ do -- ### opts helpers
 				act_opts.inherit = nil
 				M.tbl_inner_extend('keep', act_opts, config)
 			else
-				p_name = inheritable_keys[act_opts.inherit] -- default parent of the inherited action
+				p_name = key_inheritance[act_opts.inherit] -- default parent of the inherited action
 				local preset = config[act_opts.inherit] or { inherit = true }
 				act_opts.inherit = nil
 				M.tbl_inner_extend('keep', act_opts, preset)
 			end
 		end
 
-		for key, is_action in pairs(inheritable_keys) do
+		for key, is_action in pairs(key_inheritance) do
 			local val = act_opts[key]
 			if not is_action and type(val) == 'table' and val.inherit then
 				if val.inherit ~= true then error 'Preset referencing not allowed in action defaults.' end
@@ -241,38 +241,31 @@ do -- ### opts helpers
 				if config[key] then M.tbl_inner_extend('keep', val, config[key]) end
 			end
 		end
+
 		return act_opts
 	end
 
-	function M.prepare_presets(config, inheritable_keys)
-		local presets = config.presets
-		for _, preset in pairs(presets) do
-			M.expand_config(presets, false, preset, inheritable_keys)
-		end
-		config.presets = presets
-	end
-
-	--- Expands `opts.actions[action]` with defaults from {opts} and returns the expanded action.
+	--- Expands `opts.actions[action]` into {opts}.
 	---@generic O: manipulator.Inheritable
 	---@param config { [string]: O, presets: {[string]: O|{[string]: O}} }
 	---@param opts? `O`|string user options specifically for the action
 	---@param action? string
-	---@param inheritable_keys {[string]: boolean|string} keys with inheritance defaults
+	---@param key_inheritance {[string]: boolean|string} keys with inheritance defaults
 	---@return O
-	function M.get_opts_for_action(config, opts, action, inheritable_keys)
+	function M.get_opts_for_action(config, opts, action, key_inheritance)
 		---@diagnostic disable-next-line: param-type-mismatch
 		opts = type(opts) ~= 'table' and { inherit = opts } or M.tbl_inner_extend('force', {}, opts, 2)
 		if opts.inherit == false then return opts end
 		local act_opts = M.expand_action(
 			-- new table with inheritance to distinguish inherited keys from explicit user options
 			opts.inherit == nil and config
-				or M.expand_config(config.presets, config, { inherit = opts.inherit }, inheritable_keys),
+				or M.expand_config(config.presets, config, { inherit = opts.inherit }, key_inheritance),
 			action,
-			inheritable_keys
+			key_inheritance
 		)
 		act_opts.presets = nil
 		opts.inherit = true -- now copy the action defaults into the user opts
-		M.expand_config(config.presets, act_opts, opts, inheritable_keys)
+		M.expand_config(config.presets, act_opts, opts, key_inheritance)
 
 		return opts
 	end

@@ -7,30 +7,97 @@ local Batch = require 'manipulator.batch'
 ---@field protected range Range4? injected field in case of manipulator.BufRange extending
 ---@field protected text string? injected field to source the text from
 ---@field protected lines string[]? injected field to source the text from
+---@field protected config manipulator.Region.Config
 local Region = {}
 Region.__index = Region
+
+---@class manipulator.Region.Config: manipulator.Inheritable
+---@field jump? manipulator.Region.jump.Opts
+---@field select? manipulator.Region.select.Opts
+---@field paste? manipulator.Region.paste.Opts
+---@field swap? manipulator.Region.swap.Opts
+---@field queue_or_run? manipulator.Region.queue_or_run.Opts
+---@field presets? {[string]:manipulator.Region.Config}
+
+Region.opt_inheritance = {
+	jump = true,
+	select = true,
+	paste = true,
+	swap = true,
+	queue_or_run = true,
+}
 
 ---@class manipulator.Region.module: manipulator.Region
 ---@field class manipulator.Region
 local M = UTILS.static_wrap_for_oop(Region, {})
 
+---@class manipulator.Region.module.Config: manipulator.Region.Config
+---@field current? manipulator.Region.module.current.Opts
+
+---@type manipulator.Region.module.Config
+M.default_config = { inherit = false, presets = {} }
+---@type manipulator.Region.module.Config
+M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
+M.config.presets.active = M.config
+
+--- Resolve option inheritance etc. and set automatic enabler tables index fallbacks.
+---@generic O: manipulator.Region.Config
+---@param config `O`|string user config to get expanded - updated inside
+---@return O cfg expanded with all default config
+function Region:expand_config(config)
+	local orig = self.config or M.config
+	return UTILS.expand_config(orig.presets, orig, config, self.opt_inheritance)
+end
+
+---@protected
+---@generic O: manipulator.Region.Config
+---@param opts? `O`|string user options to get expanded - updated into a copy
+---@param action string
+---@return O # opts expanded for the given method
+function Region:action_opts(opts, action)
+	return UTILS.get_opts_for_action(self.config or M.config, opts, action, self.opt_inheritance)
+end
+
+---@param config manipulator.Region.module.Config
+function M.setup(config)
+	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, Region.opt_inheritance)
+	M.config.presets.active = M.config
+	return M
+end
+
 ---@generic O: manipulator.Region
----@param o manipulator.RangeType|{lines?:string[],text?:string}|`O`
+---@param self `O`
+---@param base manipulator.RangeType|{lines?:string[],text?:string}
 ---@return O
-function Region:new(o)
-	self = setmetatable(o or {}, self)
+function Region:new(base)
+	self = setmetatable(base or {}, self.buf and getmetatable(self) or self)
 	if (self.buf or 0) == 0 then self.buf = vim.api.nvim_get_current_buf() end
 	return self
 end
 
----@param override table modifications to apply to the cloned result
+---@param override table modifications to apply to the cloned object
 function Region:clone(override)
 	return setmetatable(vim.tbl_deep_extend('keep', override or {}, self), getmetatable(self))
 end
 
+--- Create a copy of this node with different defaults. (always persistent)
+---@generic O: manipulator.Region.Config
+---@generic S: manipulator.Region
+---@param self `S`
+---@param config `O`|string
+---@param inplace boolean should we replace current config or clone the region first (default: false)
+---@return S self
+function Region:with(config, inplace)
+	---@diagnostic disable-next-line: undefined-field
+	local ret = inplace and self or self:clone()
+	---@diagnostic disable-next-line: undefined-field
+	ret.config = self:expand_config(config)
+	return ret
+end
+
 ---@return integer|false # comparison of inclusion of range
 ---   - `false` if from different buffers
----   - `>0` if {b} is a subset of {a}, `0` when equal, `<0` otherwise
+---   - `>0` if {b} is fully enclosed by {a}, `0` when equal, `<0` otherwise
 function Region:contains(new)
 	local b1, r1 = RANGE_UTILS.decompose(self, true)
 	local b2, r2 = RANGE_UTILS.decompose(new, true)
@@ -52,8 +119,7 @@ function Region:__tostring() return self:get_lines(true)[1] or 'NilRegion' end
 ---@return Range4 0-indexed range
 function Region:range0()
 	local range = self[1] and self or self.range
-	return range and { range[1], range[2], range[3], range[4] }
-		or RANGE_UTILS.offset(self:range1(), -1)
+	return range and { range[1], range[2], range[3], range[4] } or RANGE_UTILS.offset(self:range1(), -1)
 end
 
 ---@return Range4 1-indexed range
@@ -149,9 +215,8 @@ end
 --- Jump to the start (or end, if `opts.end_`) of the region.
 ---@param opts? manipulator.Region.jump.Opts
 function Region:jump(opts)
-	opts = opts or {}
-	local r = opts.rangemod == false and self:range0()
-		or (opts.rangemod or RANGE_UTILS.get_trimmed_range)(self)
+	opts = self:action_opts(opts, 'jump')
+	local r = opts.rangemod == false and self:range0() or (opts.rangemod or RANGE_UTILS.get_trimmed_range)(self)
 
 	RANGE_UTILS.jump(
 		{ buf = self.buf, range = not opts.end_ and { r[1], r[2] } or { r[3], r[4] } },
@@ -169,9 +234,8 @@ end
 --- Select node in visual/select mode.
 ---@param opts? manipulator.Region.select.Opts
 function Region:select(opts)
-	opts = opts or {}
-	local r = opts.rangemod == false and self:range0()
-		or (opts.rangemod or RANGE_UTILS.get_trimmed_range)(self)
+	opts = self:action_opts(opts, 'select')
+	local r = opts.rangemod == false and self:range0() or (opts.rangemod or RANGE_UTILS.get_trimmed_range)(self)
 	local buf = self.buf
 	if buf == 0 then
 		buf = vim.api.current_buf()
@@ -218,15 +282,25 @@ end
 
 ---@class manipulator.Region.paste.Opts
 ---@field dst? manipulator.RangeType where to put the text relative to (default: self)
----@field text? string text to paste (default: `self:get_text()`)
+---@field text? string text to paste or '"x' to paste from register `x` (default: `self:get_text()`)
 ---@field mode? 'before'|'after'|'over' method of modifying the dst range text content, doesn't support 'swap' mode
 ---@field linewise? boolean
 
 --- Paste like with visual mode motions - prefer using vim motions
 ---@param opts manipulator.Region.paste.Opts
 function Region:paste(opts)
+	opts = self:action_opts(opts, 'paste')
 	local buf, range = RANGE_UTILS.decompose(opts.dst or self, true)
-	local text = opts.text or self:get_text()
+	local text = opts.text
+	if not text then
+		text = self:get_text()
+	elseif #text == 2 and text:sub(1, 1) == '"' then
+		text = vim.fn.getreg(text:sub(2, 2))
+		if not text then
+			vim.notify('Register ' .. opts.text:sub(2, 2) .. ' is empty', vim.log.levels.INFO)
+			return
+		end
+	end
 	if not buf or not range[1] then
 		vim.notify('Invalid dst to paste to', vim.log.levels.INFO)
 		return
@@ -246,11 +320,7 @@ function Region:paste(opts)
 		range[2] = range[4]
 	end -- else mode = 'over'
 
-	vim.lsp.util.apply_text_edits(
-		{ { range = RANGE_UTILS.lsp_range(range), newText = text } },
-		buf,
-		'utf-8'
-	)
+	vim.lsp.util.apply_text_edits({ { range = RANGE_UTILS.lsp_range(range), newText = text } }, buf, 'utf-8')
 end
 
 ---@class manipulator.Region.swap.Opts
@@ -262,6 +332,7 @@ end
 --- Maintains cursor (and visual selection) on the region specified via `opts.cursor_with`.
 ---@param opts manipulator.Region.swap.Opts
 function Region:swap(opts)
+	opts = self:action_opts(opts, 'swap')
 	local sbuf, srange = RANGE_UTILS.decompose(self, true)
 	local dbuf, drange = RANGE_UTILS.decompose(opts.dst, true)
 	if not srange[1] or not drange[1] then
@@ -274,8 +345,7 @@ function Region:swap(opts)
 	local c_at_src = opts.cursor_with == 'src'
 	local c_pos, c_end, v_pos, v_end -- relative pos to the start or end of the region
 	if opts.cursor_with then
-		local range, leading =
-			RANGE_UTILS.current_visual(opts.visual == false and {} or opts.visual, false)
+		local range, leading = RANGE_UTILS.current_visual(opts.visual == false and {} or opts.visual, false)
 		if not range or opts.visual == false then
 			c_pos = RANGE_UTILS.current_point(nil, false).range
 			if range then vim.cmd { cmd = 'normal', bang = true, args = { '\027' } } end
@@ -306,11 +376,7 @@ function Region:swap(opts)
 			v_pos -- if visual is allowed then always select to the whole region
 			or not c_pos
 			or RANGE_UTILS.cmpPoint(c_end and RANGE_UTILS.subRange({ 0, 0 }, c_pos) or c_pos, size) > 0
-			or (
-				v_pos
-				and RANGE_UTILS.cmpPoint(v_end and RANGE_UTILS.subRange({ 0, 0 }, v_pos) or v_pos, size)
-					> 0
-			)
+			or (v_pos and RANGE_UTILS.cmpPoint(v_end and RANGE_UTILS.subRange({ 0, 0 }, v_pos) or v_pos, size) > 0)
 		then -- cursor outside manipulated ranges -> select start-to-end
 			c_pos, c_end = { 0, 0 }, c_end
 			if v_pos then
@@ -340,9 +406,7 @@ function Region:swap(opts)
 		end
 	else
 		-- always jump to the tracked region to calculate the shift afterwards
-		if opts.cursor_with then
-			RANGE_UTILS.jump { buf = sbuf, range = c_at_src and drange or srange }
-		end
+		if opts.cursor_with then RANGE_UTILS.jump { buf = sbuf, range = c_at_src and drange or srange } end
 		vim.lsp.util.apply_text_edits({ s_edit, d_edit }, sbuf, 'utf-8')
 
 		-- TODO: make Region inherit from Range
@@ -369,7 +433,7 @@ do
 	---@type table<string,manipulator.Region?>
 	local queued_map = {}
 
-	---@class manipulator.Region.queue_or_run.Opts: {[string]:any}
+	---@class manipulator.Region.queue_or_run.Opts: manipulator.Region.paste.Opts,manipulator.Region.swap.Opts
 	---@field group? string used as a key to allow multiple pending moves
 	---@field highlight? string|false highlight group to use, suggested to specify with custom {group} (default: 'IncSearch')
 	---@field allow_grow? boolean if selected region can be updated to the current when its fully contained or should be deselected (default: false)
@@ -380,7 +444,7 @@ do
 	---@param opts? manipulator.Region.queue_or_run.Opts included action options used only on run call
 	---@return manipulator.Region? self returns itself if it was the first to be selected; nil, if selection was removed
 	function Region:queue_or_run(opts)
-		opts = opts or {} -- TODO: make this into inheritable settings
+		opts = self:action_opts(opts, 'queue_or_run')
 		if opts.highlight == nil then opts.highlight = 'IncSearch' end
 		opts.group = opts.group or opts.highlight
 
@@ -399,10 +463,7 @@ do
 			if vim.api.nvim_buf_is_valid(active.buf) then
 				queued_map[opts.group] = nil
 				active:highlight(false)
-				vim.notify(
-					self.buf and 'Unselected' or 'Cannot run queued action on Nil',
-					vim.log.levels.WARN
-				)
+				vim.notify(self.buf and 'Unselected' or 'Cannot run queued action on Nil', vim.log.levels.WARN)
 				return
 			end
 			active = nil
@@ -433,10 +494,16 @@ do -- ### Wrapper for nil matches
 	---@class manipulator.NilRegion: manipulator.Region
 	local NilRegion = { range = {} }
 	function NilRegion:clone() return self end -- nil is only one
+	NilRegion.with = NilRegion.clone
 	function NilRegion:__tostring() return 'Nil' end
 	-- allow queue_or_run() to deselect the group and collect() to return an empty Batch
-	local passthrough =
-		{ Nil = true, highlight = true, collect = true, swap = true, queue_or_run = true }
+	local passthrough = {
+		Nil = true,
+		action_opts = true,
+		highlight = true,
+		collect = true,
+		queue_or_run = true,
+	}
 	function NilRegion:__index(key)
 		if passthrough[key] then return Region[key] end
 		return function() vim.notify('Cannot ' .. key .. ' Nil') end
@@ -445,6 +512,10 @@ do -- ### Wrapper for nil matches
 	---@protected
 	Region.Nil = setmetatable(NilRegion, NilRegion)
 end
+
+---@param range manipulator.RangeType|{lines?:string[],text?:string}
+---@return manipulator.Region
+function M.from(range) return Region:new(range) end
 
 ---@class manipulator.Region.module.current.Opts options for retrieving various kinds of user position
 ---@field mouse? boolean if the event is a mouse click
@@ -456,10 +527,10 @@ end
 ---@return manipulator.Region # object of the selected region (point or range)
 ---@return boolean is_visual true if the range is from visual mode
 function M.current(opts)
-	opts = opts or {}
+	opts = M:action_opts(opts, 'current')
+
 	local range = opts.visual ~= false and RANGE_UTILS.current_visual(opts.visual, opts.insert_fixer)
-	return Region:new(range or RANGE_UTILS.current_point(opts.mouse, opts.insert_fixer)),
-		not not range
+	return M.from(range or RANGE_UTILS.current_point(opts.mouse, opts.insert_fixer)), not not range
 end
 
 return M

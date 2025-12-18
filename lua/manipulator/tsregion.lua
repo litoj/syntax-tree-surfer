@@ -1,10 +1,25 @@
 ---@diagnostic disable: invisible
+
+local Region = require 'manipulator.region'
+local UTILS = require 'manipulator.utils'
+local RANGE_UTILS = require 'manipulator.range_utils'
+local TS_UTILS = require 'manipulator.ts_utils'
+local NVIM_TS_UTILS = require 'nvim-treesitter.ts_utils'
+local Batch = require 'manipulator.batch'
+
+---@class manipulator.TSRegion: manipulator.Region
+---@field public node TSNode
+---@field public ltree vim.treesitter.LanguageTree
+---@field protected config manipulator.TSRegion.Config
+local TSRegion = setmetatable({ super = Region.class }, Region.class) -- allowing for user extensions
+TSRegion.__index = TSRegion
+
 ---@class manipulator.TSRegion.Opts: manipulator.Inheritable base set of options for configuring the behaviour of methods
 ---@field types? manipulator.Enabler|{inherit:boolean|string} which types of nodes to accept, which to ignore (if previous node of identical range not accepted) + if it should inherit previous/preset values
 ---@field langs? false|manipulator.Enabler|{inherit:boolean|string} which languages to accept (false to disable LanguageTree switching) (seeking further in the direction if not accepted (parent or child))
 ---@field nil_wrap? boolean if nodes should return a nil node wrapper instead of nil (for method chaining)
 
----@class manipulator.TSRegion.MethodConfig: manipulator.TSRegion.Opts
+---@class manipulator.TSRegion.Config: manipulator.TSRegion.Opts, manipulator.Region.Config
 ---@field parent? manipulator.TSRegion.Opts
 ---@field child? manipulator.TSRegion.Opts
 ---@field sibling? manipulator.TSRegion.SiblingOpts
@@ -13,8 +28,9 @@
 ---@field in_graph? manipulator.TSRegion.GraphOpts
 ---@field next_in_graph? manipulator.TSRegion.GraphOpts
 ---@field prev_in_graph? manipulator.TSRegion.GraphOpts
+---@field presets? {[string]:manipulator.TSRegion.Config}
 
-local inheritable_keys = {
+TSRegion.opt_inheritance = UTILS.tbl_inner_extend('keep', Region.opt_inheritance, {
 	types = false,
 	langs = false,
 
@@ -26,25 +42,13 @@ local inheritable_keys = {
 	in_graph = true,
 	next_in_graph = 'in_graph',
 	prev_in_graph = 'in_graph',
-}
+})
 
----@class manipulator.TSRegion.Config: manipulator.TSRegion.MethodConfig
----@field presets? {[string]:manipulator.TSRegion.MethodConfig}
-
-local Region = require 'manipulator.region'
-local UTILS = require 'manipulator.utils'
-local RANGE_UTILS = require 'manipulator.range_utils'
-local TS_UTILS = require 'manipulator.ts_utils'
-local NVIM_TS_UTILS = require 'nvim-treesitter.ts_utils'
-local Batch = require 'manipulator.batch'
-
----@class manipulator.TSRegion: manipulator.Region
----@field public buf integer
----@field public node TSNode
----@field public ltree vim.treesitter.LanguageTree
----@field private config manipulator.TSRegion.Config
-local TSRegion = setmetatable({ super = Region.class }, Region.class) -- allowing for user extensions
-TSRegion.__index = TSRegion
+local function activate_enablers(opts)
+	if opts.types then UTILS.activate_enabler(opts.types, '[^a-z_]') end
+	if type(opts.langs) == 'table' then UTILS.activate_enabler(opts.langs) end
+	return opts
+end
 
 ---@class manipulator.TSRegion.module: manipulator.TSRegion
 ---@field class manipulator.TSRegion
@@ -52,6 +56,11 @@ local M = UTILS.static_wrap_for_oop(TSRegion, {})
 
 ---@class manipulator.TSRegion.module.Config: manipulator.TSRegion.Config
 ---@field prefer_ft_preset? boolean should the base preset for all nodes be based on filetype-named presets (extending the config) or just use the config alone
+---@field get? manipulator.TSRegion.module.get.Opts
+---@field get_all? manipulator.TSRegion.module.get.Opts
+---@field current? manipulator.TSRegion.module.current.Opts
+
+---@type manipulator.TSRegion.module.Config
 M.default_config = {
 	langs = { ['*'] = true, 'luap', 'printf', 'regex' },
 	types = {
@@ -92,7 +101,7 @@ M.default_config = {
 		},
 
 		markdown = {
-			inherit = 'default',
+			inherit = 'active',
 			types = {
 				inherit = true,
 				['*'] = true,
@@ -104,7 +113,7 @@ M.default_config = {
 			},
 		},
 		tex = {
-			inherit = 'default',
+			inherit = 'active',
 			types = {
 				inherit = true,
 				['*'] = true,
@@ -115,52 +124,41 @@ M.default_config = {
 	},
 }
 
-local function with_setup_enablers(opts)
-	UTILS.activate_enabler(opts.types, '[^a-z_]')
-	if type(opts.langs) == 'table' then UTILS.activate_enabler(opts.langs) end
-	return opts
+---@type manipulator.TSRegion.module.Config
+M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
+M.config.presets.active = M.config
+for _, v in pairs(M.config.presets) do
+	activate_enablers(v)
 end
 
-do
-	-- TODO: this should be the workflow of every setup
-	---@type manipulator.TSRegion.module.Config
-	M.config = UTILS.tbl_inner_extend('keep', {}, M.default_config, true, 'noref')
-	M.config.presets.default = M.config
-	UTILS.prepare_presets(M.config, inheritable_keys)
-	with_setup_enablers(M.config) -- minimize repeated work of converting types list to a map
-	-- TODO: with real setup user can give config that is based on presets ->
-	-- after preset relation resolution also expand the config with 'default' if inherit is still true
-end
-
-local function get_base_config(expanded, buf)
-	local bp = M.config.presets[vim.bo[buf].ft]
+local function get_ft_config(expanded, buf)
+	local bp = M.config.presets[vim.bo[buf or 0].ft]
 	-- base config is always fully expanded, because it doesn't inherit
 	if not M.config.prefer_ft_preset or not bp then return M.config end
-	return expanded and UTILS.expand_config(M.config.presets, M.config, bp, inheritable_keys) or bp
+	return expanded and UTILS.expand_config(M.config.presets, M.config, bp, TSRegion.opt_inheritance) or bp
 end
 
---- Resolve option inheritance etc. and set automatic enabler tables index fallbacks.
----@generic S: manipulator.TSRegion.Config
----@param orig manipulator.TSRegion.Config
----@param config `S`|string user config to get expanded - updated inside
----@return S cfg expanded with all default config
-local function expand_config(orig, config)
-	return with_setup_enablers(UTILS.expand_config(
-		orig.presets,
-		M.config == orig and get_base_config(false, 0) or orig, -- FIXME: we rely on the active buffer
-		config,
-		inheritable_keys
-	))
+---@override
+function TSRegion:expand_config(config)
+	local orig = self.config or get_ft_config(false)
+	return activate_enablers(UTILS.expand_config(orig.presets, orig, config, self.opt_inheritance))
 end
 
----@generic O: manipulator.TSRegion.Opts
----@param config manipulator.TSRegion.Config
----@param opts? `O`|string user options to get expanded - updated into a copy
----@param method? string
----@return O # opts expanded for the given method
-local function action_opts(config, opts, method)
-	opts = UTILS.get_opts_for_action(config, opts, method, inheritable_keys)
-	return with_setup_enablers(opts)
+---@override
+function TSRegion:action_opts(opts, action)
+	return activate_enablers(
+		UTILS.get_opts_for_action(self.config or get_ft_config(true, self.buf), opts, action, self.opt_inheritance)
+	)
+end
+
+---@param config manipulator.TSRegion.module.Config
+function M.setup(config)
+	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, TSRegion.opt_inheritance)
+	M.config.presets.active = M.config
+	activate_enablers(M.config) -- minimize repeated work of converting types list to a map
+	-- region actions on TSRegions will look for its defaults here -> copy the defaults
+	UTILS.tbl_inner_extend('keep', M.config, Region.config, 2)
+	return M
 end
 
 --- Create a new language-tree node wrapper.
@@ -172,40 +170,21 @@ function TSRegion:new(opts, node, ltree)
 	node, ltree = TS_UTILS.top_identity(opts, node, ltree or self.ltree)
 	if not node or not ltree then return opts.nil_wrap and self.Nil end
 
-	return TSRegion.super.new(TSRegion, {
+	return TSRegion.super.new(self, {
 		buf = ltree._source,
 		node = node,
 		ltree = ltree,
-		config = self.config or get_base_config(true, ltree._source),
+		config = self.config or get_ft_config(true, ltree._source),
 	})
 end
 
-function TSRegion:range1() return { NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
+function TSRegion:range0() return { self.node:range() } end --NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
 
 function TSRegion:start() return { self.node:start() } end
--- TODO: does the end shifted by one matter?, test the same for range0
--- function TSRegion:end_() return { self.node:end_() } end
 
 ---@protected
 function TSRegion:__tostring()
-	return string.format(
-		'%s: %s',
-		self.node and self.node:type() or 'invalid',
-		TSRegion.super.__tostring(self)
-	)
-end
-
---- Create a copy of this node with different defaults. (always persistent)
----@param config manipulator.TSRegion.Config|string
----@param inplace boolean should we replace current config or make new copy (default: false)
----@return manipulator.TSRegion
-function TSRegion:with(config, inplace)
-	---@diagnostic disable-next-line: inject-field
-	config = expand_config(self.config, config)
-
-	local ret = inplace and self or self:new(config, self.node)
-	ret.config = config
-	return ret
+	return string.format('%s: %s', self.node and self.node:type() or 'invalid', TSRegion.super.__tostring(self))
 end
 
 --- Get a parent node.
@@ -213,7 +192,7 @@ end
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:parent(opts)
-	opts = action_opts(self.config, opts, 'parent')
+	opts = self:action_opts(opts, 'parent')
 
 	local node, ltree = TS_UTILS.top_identity(opts, self.node, self.ltree, true)
 	return self:new(opts, node, ltree), ltree ~= self.ltree
@@ -225,7 +204,7 @@ end
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:child(idx, opts)
-	opts = action_opts(self.config, opts, 'child')
+	opts = self:action_opts(opts, 'child')
 
 	local node, ltree = TS_UTILS.get_child(opts, self.node, self.ltree, idx)
 	return self:new(opts, node, ltree), ltree ~= self.ltree
@@ -264,7 +243,7 @@ end
 ---@param opts? manipulator.TSRegion.SiblingOpts|string
 ---@return manipulator.TSRegion? node from the given direction, TODO: currently only within the current ltree
 function TSRegion:sibling(direction, opts)
-	opts = action_opts(self.config, opts, direction)
+	opts = self:action_opts(opts, direction)
 
 	opts.max_skip = (opts.max_skip or math.huge) + 1 -- +1 to first allow a visit
 	if not opts.lvl_diff and not opts.ancestor_diff then -- set defaults if no return policy exists
@@ -373,7 +352,7 @@ function TSRegion:prev(opts) return self:sibling('prev', opts) end
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:next_in_graph(opts)
-	opts = action_opts(self.config, opts, 'next_in_graph')
+	opts = self:action_opts(opts, 'next_in_graph')
 	local node, ltree = TS_UTILS.next_in_graph(opts, self.node, self.ltree)
 	return self:new(opts, node, ltree), ltree == self.ltree
 end
@@ -383,7 +362,7 @@ end
 ---@return manipulator.TSRegion? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TSRegion:prev_in_graph(opts)
-	opts = action_opts(self.config, opts, 'prev_in_graph')
+	opts = self:action_opts(opts, 'prev_in_graph')
 	local node, ltree = TS_UTILS.prev_in_graph(opts, self.node, self.ltree)
 	return self:new(opts, node, ltree), ltree == self.ltree
 end
@@ -392,7 +371,7 @@ do -- ### Wrapper for nil TSNode matches
 	local nil_fn = function(self) return self end
 	local nr_index = Region.class.Nil.__index
 
-	local pass_through = { Nil = true }
+	local pass_through = { Nil = true, action_opts = true }
 	function Region.class.Nil:__index(key)
 		if rawget(TSRegion, key) then
 			if pass_through[key] then return TSRegion[key] end
@@ -415,11 +394,11 @@ end
 ---@param opts manipulator.TSRegion.module.get.Opts
 ---@return manipulator.TSRegion?
 function M.get(opts)
-	opts = expand_config(M.config, opts)
+	opts = M:action_opts(opts, 'get')
 
 	local ltree = vim.treesitter.get_parser(opts.buf or 0)
 	opts.buf = nil
-	if not ltree then return TSRegion:new(opts, opts) end
+	if not ltree then return TSRegion:new(opts) end
 	local range = opts.range
 	opts.range = nil
 	-- slow, but we have no other way to get the language info (and ltree) the node is in
@@ -433,7 +412,7 @@ end
 ---@param opts manipulator.TSRegion.module.get.Opts|{range?:nil}
 ---@return manipulator.Batch
 function M.get_all(opts)
-	opts = expand_config(M.config, opts)
+	opts = M:action_opts(opts, 'get_all')
 
 	local ltree = vim.treesitter.get_parser(opts.buf or 0)
 	opts.buf = nil
@@ -474,7 +453,7 @@ end
 ---@param opts? manipulator.TSRegion.module.current.Opts persistent by default
 ---@return manipulator.TSRegion?
 function M.current(opts)
-	opts = expand_config(M.config, opts)
+	opts = M:action_opts(opts, 'current')
 
 	local region, visual = Region.current(opts)
 	opts.mouse = nil

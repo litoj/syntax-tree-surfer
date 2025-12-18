@@ -2,15 +2,6 @@
 local UTILS = require 'manipulator.utils'
 local RANGE_UTILS = require 'manipulator.range_utils'
 
----@class manipulator.Batch.Opts: manipulator.Inheritable
----@field on_nil_item? 'drop'|'drop_all'|'include' what to do when an item is `nil` (remove it/all?)
-
----@class manipulator.Batch.MethodConfig: manipulator.Batch.Opts
----@field pick? manipulator.Batch.pick.Opts
-
----@class manipulator.Batch.Config: manipulator.Batch.MethodConfig
----@field presets { [string]: manipulator.Batch.MethodConfig }
-
 ---@class manipulator.Batch
 ---@field private items manipulator.Region[]
 ---@field private Nil manipulator.Region|false what to return, if no items are valid/chosen
@@ -18,12 +9,23 @@ local RANGE_UTILS = require 'manipulator.range_utils'
 local Batch = {}
 Batch.__index = Batch
 
+---@class manipulator.Batch.Opts: manipulator.Inheritable
+---@field on_nil_item? 'drop'|'drop_all'|'include' what to do when an item is `nil` (remove it/all?)
+
+---@class manipulator.Batch.Config: manipulator.Batch.Opts
+---@field pick? manipulator.Batch.pick.Opts
+---@field presets? { [string]: manipulator.Batch.Config }
+
+Batch.opt_inheritance = { pick = true }
+
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
 local M = UTILS.static_wrap_for_oop(Batch, {})
 
 ---@class manipulator.Batch.module.Config: manipulator.Batch.Config
 ---@field recursive_limit? integer how many iterations is from_recursive() allowed by default
+
+---@type manipulator.Batch.module.Config
 M.default_config = {
 	on_nil_item = 'drop_all',
 	inherit = false,
@@ -43,11 +45,15 @@ M.default_config = {
 	presets = {},
 }
 
-local inheritable_keys = { pick = true }
+---@type manipulator.Batch.module.Config
+M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
+M.config.presets.active = M.config
 
-M.config = M.default_config
-M.config.presets.default = M.config
-UTILS.prepare_presets(M.config, inheritable_keys)
+---@param config manipulator.Batch.module.Config
+function M.setup(config)
+	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, Batch.opt_inheritance)
+	return M
+end
 
 ---@private
 ---@param opts manipulator.Batch.Opts
@@ -87,16 +93,14 @@ function Batch:__tostring() return '[' .. table.concat(self.items, ', ') .. ']' 
 ---@param inplace boolean should we replace current config or make new copy (default: false)
 function Batch:with(config, inplace)
 	---@diagnostic disable-next-line: inject-field
-	config = UTILS.expand_config(self.config.presets, self.config, config, inheritable_keys)
+	config = UTILS.expand_config(self.config.presets, self.config, config, Batch.opt_inheritance)
 
 	local ret = inplace and self or self:new(config, self.items, self.Nil)
 	ret.config = config
 	return ret
 end
 
-function Batch:at(index)
-	return self.items[index > 0 and index or #self.items + 1 + index] or self.Nil
-end
+function Batch:at(index) return self.items[index > 0 and index or #self.items + 1 + index] or self.Nil end
 
 ---@alias manipulator.Batch.Action (fun(item:manipulator.Region):manipulator.Region?)|manipulator.CallPath|string|string[]
 
@@ -185,14 +189,12 @@ end
 ---@param opts? manipulator.Batch.pick.Opts can include all `fzf-lua.config.Base` opts
 ---@return manipulator.Region|manipulator.Batch?
 function Batch:pick(opts)
-	opts = UTILS.get_opts_for_action(self.config, opts, 'pick', inheritable_keys)
+	opts = UTILS.get_opts_for_action(self.config, opts, 'pick', Batch.opt_inheritance)
 
 	local co
 	local callback = opts.callback
 	local pick
-	local function resolve(result)
-		callback(opts.multi and self:new(opts, result, self.Nil) or result[1] or self.Nil)
-	end
+	local function resolve(result) callback(opts.multi and self:new(opts, result, self.Nil) or result[1] or self.Nil) end
 	if #self.items <= 1 and (opts.autoselect_single or #self.items == 0) then
 		if type(callback) ~= 'function' then callback = function(x) pick = x end end
 		resolve { self.Nil }
