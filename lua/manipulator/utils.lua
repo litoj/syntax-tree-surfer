@@ -60,9 +60,7 @@ do -- ### module helpers
 	--- Ensure that the function at {key} gets the appropriate `self` object
 	function M.fn_self_wrap(fake_self, real_self, key)
 		-- pass on `self` only if it seems it's a method call on fake_self
-		local wrap = function(arg_self, ...) return real_self[key](arg_self == fake_self and real_self or arg_self, ...) end
-		rawset(fake_self, key, wrap)
-		return wrap
+		return function(arg_self, ...) return real_self[key](arg_self == fake_self and real_self or arg_self, ...) end
 	end
 
 	---@generic I
@@ -71,7 +69,7 @@ do -- ### module helpers
 	---@param static `O`|table object with static methods that should not be visible from {oop}
 	---@return O|I|{class:I} static delegating all {oop} functionality back to {oop}
 	function M.static_wrap_for_oop(oop, static)
-		rawset(static, 'class', oop)
+		rawset(static, 'class', oop) -- TODO: useful only for new()
 		local idx = static.__index
 		static.__index = function(_, k)
 			local val = oop[k]
@@ -79,7 +77,9 @@ do -- ### module helpers
 			if val ~= nil or not idx then return val end
 			return idx(static, k)
 		end
-		if not static.__new_index then static.__new_index = function(_, k, v) oop[k] = v end end
+		if not static.__new_index then
+			static.__new_index = function(_, k, v) error('Tried to set value "' .. k .. '" to "' .. v .. '"') end
+		end
 		return setmetatable(static, static)
 	end
 end
@@ -174,19 +174,21 @@ do -- ### opts helpers
 	---@generic O: manipulator.Inheritable
 	---@param super O|{ [string]: O }|false base options, or false to not resolve the base yet
 	---@param presets { [string]: O|{[string]: O} } should contain ['super'] as the parent Opts
-	---@param config `O`|string
+	---@param config? `O`|string
 	---@param key_inheritance manipulator.KeyInheritanceMap defaults of key inheritance
 	---@return O|{ presets: { [string]: O|{[string]: O} } } opts
 	function M.expand_config(presets, super, config, key_inheritance)
 		presets[true] = super
-		config = type(config) ~= 'table' and { inherit = config } or config
+		config = type(config) ~= 'table' and { inherit = config } or config ---@type table
 
+		local last
 		while config.inherit ~= false do
 			local preset = presets[config.inherit or true]
-			if not preset then
-				if preset == false then break end -- to resolve presets, but set the base options later
+			if not preset or (config.inherit or true) == last then
+				if preset ~= nil then break end -- prevent recursion (useful for preset merging during setup)
 				error('Invalid preset "' .. (config.inherit or true) .. '"')
 			end
+			last = config.inherit or true
 
 			config.inherit = nil -- allow preset to set its own inheritance object
 			M.tbl_inner_extend('keep', config, preset)
@@ -196,9 +198,10 @@ do -- ### opts helpers
 			if not is_action then -- actions are resolved separately -> ignore them here
 				local val = config[key]
 				if type(val) == 'table' and rawget(val, 'inherit') then
-					while rawget(val, 'inherit') do
+					last = nil
+					while rawget(val, 'inherit') do -- rawget to not trigger enablers
 						local preset = presets[val.inherit]
-						if preset == false then break end -- preset is a resolving breakpoint
+						if val.inherit ~= last or not preset then break end -- breakpoint for preset merging
 
 						val.inherit = nil
 						if preset[key] then M.tbl_inner_extend('keep', val, preset[key]) end
@@ -209,6 +212,31 @@ do -- ### opts helpers
 
 		presets[true] = nil -- avoid recursion and hence memory leaking
 		config.presets = super and presets or nil
+		return config
+	end
+
+	---@return table new
+	function M.module_setup(presets, super, new, key_inheritance)
+		if presets and new and new.presets then -- imperfect but the best possible preset merging and extending
+			for k, v in pairs(presets) do
+				if not new.presets[k] then new.presets[k] = v end
+				v.presets = nil
+			end
+
+			for k, v in pairs(new.presets) do
+				if (presets[k] or 1) ~= v then
+					new.presets.parent = presets[k] -- allow inheriting from previous version of the preset
+					M.expand_config(new.presets, false, v, key_inheritance)
+					v.presets = nil
+				end
+			end
+
+			new.presets.parent = nil
+			presets = new.presets
+		end
+
+		local config = M.expand_config(presets, super, new, key_inheritance)
+		presets.active = config
 		return config
 	end
 

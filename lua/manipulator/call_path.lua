@@ -1,35 +1,29 @@
 local UTILS = require 'manipulator.utils'
-
----@overload fun(...):manipulator.TSRegion
----@class manipulator.CallPath.TSRegion: manipulator.CallPath,manipulator.TSRegion,{[string]:manipulator.CallPath.TSRegion|fun(...):manipulator.CallPath.TSRegion}
----@overload fun(...):manipulator.Region
----@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region,{[string]:manipulator.CallPath.Region|fun(...):manipulator.CallPath.Region}
+local Batch = require 'manipulator.batch'
 
 local mod_wrap = {}
 do
 	local fb_call_wrap = {} -- wrap for a fallback call if the next key doesn't exist on the current item
-	function fb_call_wrap:__tostring() return '' end
+	function fb_call_wrap:__tostring() return 'fb_call_wrap' end
 	function fb_call_wrap:__call(_, ...) -- catch args without provided self
-		return setmetatable({ item = self.item, args = { ... } }, fb_call_wrap)
+		self.args = { ... }
+		return self
 	end
 	function fb_call_wrap:__index(key)
 		local wrappee = rawget(self.item, key)
 		if wrappee then -- is in static module -> no `self` needed
 			self[key] = function(_, ...) return wrappee(...) end
-		elseif rawget(self.item, key) then -- check the static methods
-			-- cannot use UTILS.self_wrap because CallPath always calls in method style
-			self[key] = function(_, ...) return wrappee[key](wrappee, ...) end
+			return self[key]
+		elseif type(self.item[key] or type) ~= 'function' then -- field access by some intermediate checker
+			return self.item[key]
 		else -- call fallback function to get the object version and seek the key there
-			-- index with the table to have a unique key for the given args
 			wrappee = self.item.current(unpack(self.args))
-			self[self.args] = wrappee
 			return function(_, ...) return wrappee[key](wrappee, ...) end
 		end
-		return self[key]
 	end
 	setmetatable(fb_call_wrap, fb_call_wrap)
 
-	function mod_wrap:__tostring() return '' end
+	function mod_wrap:__tostring() return 'mod_wrap' end
 	function mod_wrap:__index(key)
 		-- will be called only if the index isn't found, therefore is new and needs initializing
 		self[key] = setmetatable({ item = require('manipulator.' .. key), args = {} }, fb_call_wrap)
@@ -38,13 +32,32 @@ do
 	setmetatable(mod_wrap, mod_wrap)
 end
 
----@class manipulator.CallPath: manipulator.CallPath.Opts
+---@alias manipulator.MotionOpt 'fallback'|'print_last'|'error'
+
+---@private
+---@class manipulator.CallPath.CallInfo
+---@field field? string what method to call on the object (else call the object directly)
+---@field as_motion? manipulator.MotionOpt when applying `vim.v.count`-times what to do on nil
+---@field args? unknown[] what arguments to run the method with
+---@field anchor? string if the object is an anchor and not part an actual call
+
+---@class manipulator.CallPath.Config
+---@field immutable boolean if path additions produce new objects instead of updates
+---@field exec_on_call boolean|integer if calls should be executed (at all) or executed with delay. Makes return value useless when running async and `.immutable=false`.
+---@field strict boolean should any unfinished or anchored path be considered an error or skipped (default: false=skip)
+
+---@class manipulator.CallPath: manipulator.CallPath.Config
 ---@field private item any
----@field private path (string|{fn:string,args:unknown[]})[]
----@field private ptrs table<string,integer> map of pointers to positions in the path (`&x`->`*x`)
+---@field private path manipulator.CallPath.CallInfo[]
 ---@field private idx integer at which index do we write the path
+---@field private next_as_motion? manipulator.MotionOpt if the next index/call should be made a motion
 ---@field fn function ready-for-mapping function executing the constructed path
 local CallPath = {}
+
+---@overload fun(...):manipulator.TSRegion
+---@class manipulator.CallPath.TSRegion: manipulator.CallPath,manipulator.TSRegion,{[string]:manipulator.CallPath.TSRegion|fun(...):manipulator.CallPath.TSRegion}
+---@overload fun(...):manipulator.Region
+---@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region,{[string]:manipulator.CallPath.Region|fun(...):manipulator.CallPath.Region}
 
 ---Field `.exec_on_call`:
 --- - `number` in ms until actual execution - updates itself,
@@ -57,7 +70,7 @@ local CallPath = {}
 ---Calling the build path:
 --- - for keymappings pass in the `.fn` field,
 --- - for direct evaluation call `:exec()`/`.fn()` manually
----@overload fun(o?:manipulator.CallPath.Opts):manipulator.CallPath for generic executor builds
+---@overload fun(o?:manipulator.CallPath.Config):manipulator.CallPath for generic executor builds
 ---@class manipulator.CallPath.module: manipulator.CallPath
 ---@field tsregion manipulator.CallPath.TSRegion|fun(opts:manipulator.TSRegion.module.current.Opts):manipulator.CallPath.TSRegion
 ---@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
@@ -67,29 +80,35 @@ local M = UTILS.static_wrap_for_oop(CallPath, {
 	__call = function(self, args) return self:new(args) end,
 })
 
----@class manipulator.CallPath.Opts
----@field immutable boolean if path additions produce new objects instead of updates
----@field exec_on_call boolean|integer if calls should be executed (at all) or executed with delay. Makes return value useless when running async and `.immutable=false`.
+---@type manipulator.CallPath.Config
 M.default_config = {
 	immutable = true,
 	exec_on_call = false,
+	strict = false,
 
 	-- Default object values that get copied when creating a new node
-	needs_coroutine = false, ---@private
-	running = false,
 	idx = 0, ---@private
 }
+
+---@type manipulator.CallPath.Config
 M.config = M.default_config
 
----@param o? manipulator.CallPath.Opts|{item?: table} clones itself if {item} is not provided
+---@param config manipulator.CallPath.Config
+function M.setup(config)
+	M.config = UTILS.expand_config({ active = M.config }, M.default_config, config, {})
+	return M
+end
+
+---@param o? manipulator.CallPath.Config|{item?: table} clones itself if {item} is not provided
 ---@return manipulator.CallPath
 function CallPath:new(o)
 	---@cast o manipulator.CallPath
 	o = o or {}
 	o.path = {} -- specifying before extending to ensure the path object is modifiable
-	o.ptrs = {}
+	o.running = false
 
 	-- copies the path contents, not the path obj itself -> modification-independent
+	-- relies on the CallInfo to be immutable
 	o = UTILS.tbl_inner_extend('keep', o, self.path and self or M.config, 1)
 
 	return setmetatable(o, CallPath)
@@ -99,20 +118,18 @@ end
 function CallPath:__tostring() return vim.inspect(self.path) end
 
 ---@private
+---@param elem manipulator.CallPath.CallInfo
 function CallPath:_add_to_path(elem)
-	local idx = self.idx + 1
-	table.insert(self.path, idx, elem)
-	self.idx = idx
-
-	for k, i in pairs(self.ptrs) do -- update all placeholders ahead
-		if i >= idx then self.ptrs[k] = i + 1 end
-	end
+	self.idx = self.idx + 1
+	table.insert(self.path, self.idx, elem)
 end
+
+local PathAnchor = { __index = function() return 1 end }
 
 ---@private
 function CallPath:__index(key)
 	if CallPath[key] then return CallPath[key] end
-	if key == 'fn' then
+	if key == 'fn' then -- allow delayed method call via static reference (inject self)
 		return function() return self:exec() end
 	end
 
@@ -120,15 +137,40 @@ function CallPath:__index(key)
 
 	local k1 = #key > 1 and key:sub(1, 1) or ''
 	if k1 == '&' then -- placeholder set (reference/ptr)
-		self.ptrs[key:sub(2)] = self.idx
+		--- Create an anchor object that looks like a fully setup object
+		self:_add_to_path(setmetatable({ anchor = key:sub(2) }, PathAnchor))
 	elseif k1 == '*' then -- placeholder get (dereference)
 		k1 = key:sub(2)
-		self.idx = self.ptrs[k1] or error('Unknown anchor ' .. k1)
-		self.ptrs[k1] = nil
+
+		for i, call in ipairs(self.path) do
+			if call.anchor == k1 then
+				table.remove(self.path, i)
+				self.idx = i - 1
+				return self
+			end
+		end
+
+		error('Unknown anchor ' .. k1)
 	else -- path addition
-		self:_add_to_path(key)
+		self:_add_to_path { field = key, as_motion = rawget(self, 'next_as_motion') }
+		self.next_as_motion = nil
+
 		if key == 'pick' then self.needs_coroutine = true end -- `Batch.pick` direct integration
 	end
+	return self
+end
+
+-- TODO: dot repeat
+--- Allow the next index (call) to be repeated `vim.v.count1`-times.
+--- NOTE: anchores are ignored -> if it is followed by an anchor and
+--- then an index that index will get marked as a motion.
+---
+--- Type annotation commented, until lsp_lua figures out inheritance
+--- - `on_nil?` (`manipulator.MotionOpt`): (default: error message)
+function CallPath:next_with_count(on_nil)
+	if self.immutable then self = self:new() end
+
+	self.next_as_motion = on_nil or 'error'
 	return self
 end
 
@@ -138,19 +180,17 @@ function CallPath:__call(a1, ...)
 
 	if self.immutable then self = self:new() end
 
-	local callee = self.path[self.idx]
-	-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
-	if callee == 'pick' then
-		if args[1] and args[1].callback then self.needs_coroutine = false end
-	end
+	local call = self.path[self.idx]
 
-	if type(callee) == 'string' then
-		self.path[self.idx] = { fn = callee, args = args }
-	else -- call of the returned value directly
+	if call and not call.args then -- count-enabled call
+		self.path[self.idx] = UTILS.tbl_inner_extend('keep', { args = args }, call)
+		-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
+		if call.field == 'pick' and args[1] and args[1].callback then self.needs_coroutine = nil end
+	else -- call of the wrapped object directly
 		self:_add_to_path { args = args }
 	end
 
-	if #self.ptrs == 0 and self.exec_on_call then -- if the path is complete check autoexec settings
+	if self.exec_on_call then -- check autoexec settings
 		if self.exec_on_call == true then
 			self:exec(true)
 		else
@@ -169,17 +209,48 @@ function CallPath:_exec(inplace)
 	end
 
 	local item = self.item
-	for _, v in ipairs(self.path) do
-		if v.fn then -- method with args
-			item = item[v.fn](item, unpack(v.args))
-		elseif v.args then -- call the object directly
-			item = item(unpack(v.args))
+	for _, call in ipairs(self.path) do
+		if not rawget(call, 'field') then -- raw to skip anchor metatables
+			if rawget(call, 'args') then -- call the object directly
+				item = item(unpack(call.args))
+			elseif self.strict then
+				error('Invalid CallInfo: ' .. vim.inspect(call) .. '\nin CallPath: ' .. vim.inspect(self.path))
+			end
 		else
-			local field = item[v]
-			if type(field) == 'function' or getmetatable(field).__call then
-				item = field(item) -- method without args
+			if call.args or call.as_motion then -- method call
+				if not call.as_motion or vim.v.count1 == 1 then
+					item = item[call.field](item, unpack(call.args or {}))
+				else -- vim motion - run for multiple iterations
+					local args = call.args or {}
+					local fn = call.field
+					local batch = Batch.from_recursive(
+						item,
+						vim.v.count1,
+						function(item) return item[fn](item, unpack(args)) end
+					)
+
+					local len = batch:length()
+					if len == vim.v.count1 then
+						item = batch:at(-1)
+					else
+						vim.notify('Got to count: ' .. len, vim.log.levels.INFO)
+
+						if call.as_motion == 'fallback' then
+							item = batch:at(-1)
+						elseif call.as_motion == 'print_last' then
+							return
+						else
+							error('CallPath iteration count not satisfied: ' .. len)
+						end
+					end
+				end
 			else
-				item = field -- simple field access
+				local field = item[call.field]
+				if type(field) == 'function' or getmetatable(field).__call then
+					item = field(item) -- method without args
+				else -- field access or method call
+					item = field -- simple field access
+				end
 			end
 		end
 	end
@@ -187,7 +258,7 @@ function CallPath:_exec(inplace)
 	if inplace then
 		self.item = item
 		self.path = {}
-		self.needs_coroutine = false -- all steps processed -> async was also processed
+		self.needs_coroutine = nil -- all steps processed -> async was also processed
 		self.running = false
 	end
 	return item
@@ -195,7 +266,7 @@ end
 
 ---@param inplace? boolean if the result should replace the object, reseting the path to {}
 function CallPath:exec(inplace)
-	if self.needs_coroutine then
+	if rawget(self, 'needs_coroutine') then
 		local co = coroutine.running()
 		if not co then
 			return coroutine.wrap(function() return self:_exec(inplace) end)()

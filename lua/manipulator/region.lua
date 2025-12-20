@@ -37,8 +37,12 @@ local M = UTILS.static_wrap_for_oop(Region, {})
 ---@type manipulator.Region.module.Config
 M.default_config = { inherit = false, presets = {} }
 ---@type manipulator.Region.module.Config
-M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
-M.config.presets.active = M.config
+M.config = M.default_config
+---@param config manipulator.Region.module.Config
+function M.setup(config)
+	M.config = UTILS.module_setup(M.config.presets, M.default_config, config, Region.opt_inheritance)
+	return M
+end
 
 --- Resolve option inheritance etc. and set automatic enabler tables index fallbacks.
 ---@generic O: manipulator.Region.Config
@@ -56,13 +60,6 @@ end
 ---@return O # opts expanded for the given method
 function Region:action_opts(opts, action)
 	return UTILS.get_opts_for_action(self.config or M.config, opts, action, self.opt_inheritance)
-end
-
----@param config manipulator.Region.module.Config
-function M.setup(config)
-	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, Region.opt_inheritance)
-	M.config.presets.active = M.config
-	return M
 end
 
 ---@generic O: manipulator.Region
@@ -91,7 +88,7 @@ function Region:with(config, inplace)
 	---@diagnostic disable-next-line: undefined-field
 	local ret = inplace and self or self:clone()
 	---@diagnostic disable-next-line: undefined-field
-	ret.config = self:expand_config(config)
+	ret.config = self:expand_config(config) -- TODO: remove and replace with action_opts
 	return ret
 end
 
@@ -185,19 +182,23 @@ do
 	local hl_ns = vim.api.nvim_create_namespace 'manipulator_hl'
 
 	--- Highlight or remove highlighting from given range (run on NilRegion to clear the whole buffer)
-	---@param group? string|false highlight group name or false to clear (default: 'IncSearch')
+	---@param group? string|integer|false highlight group name or ID of the mark to clear (default: 'IncSearch')
+	---@return integer? # id of the created extmark
 	function Region:highlight(group)
 		local buf, range = RANGE_UTILS.decompose(self)
-		if group == false then
-			vim.api.nvim_buf_clear_namespace(buf, hl_ns, range[1] or 0, range[3] and range[3] + 1 or -1)
+		if not group or type(group) == 'number' then
+			vim.api.nvim_buf_del_extmark(buf, hl_ns, group or self.hl_id)
 			return
 		elseif not range[1] then
 			vim.notify('Cannot highlight Nil', vim.log.levels.INFO)
 			return
 		end
 
-		group = group or 'IncSearch'
-		vim.hl.range(buf, hl_ns, group, { range[1], range[2] }, { range[3], range[4] + 1 })
+		self.hl_id = vim.api.nvim_buf_set_extmark(buf, hl_ns, range[1], range[2], {
+			end_row = range[3],
+			end_col = range[4] + 1,
+			hl_group = group or 'IncSearch',
+		})
 	end
 end
 
@@ -510,8 +511,8 @@ do
 end
 
 do -- ### Wrapper for nil matches
-	---@class manipulator.NilRegion: manipulator.Region
-	local NilRegion = { range = {} }
+	---@class manipulator.Region.Nil: manipulator.Region
+	local NilRegion = {}
 	function NilRegion:clone() return self end -- nil is only one
 	NilRegion.with = NilRegion.clone
 	NilRegion.paste = NilRegion.clone

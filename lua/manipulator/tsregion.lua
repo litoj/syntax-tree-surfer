@@ -125,10 +125,22 @@ M.default_config = {
 }
 
 ---@type manipulator.TSRegion.module.Config
-M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
+M.config = M.default_config
 M.config.presets.active = M.config
 for _, v in pairs(M.config.presets) do
 	activate_enablers(v)
+end
+
+---@param config manipulator.TSRegion.module.Config
+function M.setup(config)
+	M.config = UTILS.module_setup(M.config.presets, M.default_config, config, TSRegion.opt_inheritance)
+	-- minimize repeated work of converting types list to a map
+	for _, v in pairs(M.config.presets) do
+		activate_enablers(v)
+	end
+	-- region actions on TSRegions will look for its defaults here -> copy the defaults
+	UTILS.tbl_inner_extend('keep', M.config, Region.config, 2)
+	return M
 end
 
 local function get_ft_config(expanded, buf)
@@ -149,16 +161,6 @@ function TSRegion:action_opts(opts, action)
 	return activate_enablers(
 		UTILS.get_opts_for_action(self.config or get_ft_config(true, self.buf), opts, action, self.opt_inheritance)
 	)
-end
-
----@param config manipulator.TSRegion.module.Config
-function M.setup(config)
-	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, TSRegion.opt_inheritance)
-	M.config.presets.active = M.config
-	activate_enablers(M.config) -- minimize repeated work of converting types list to a map
-	-- region actions on TSRegions will look for its defaults here -> copy the defaults
-	UTILS.tbl_inner_extend('keep', M.config, Region.config, 2)
-	return M
 end
 
 --- Create a new language-tree node wrapper.
@@ -182,7 +184,7 @@ function TSRegion:range1() return { NVIM_TS_UTILS.get_vim_range({ self.node:rang
 
 function TSRegion:start() return { self.node:start() } end
 
----@protected
+---@override
 function TSRegion:__tostring()
 	return string.format('%s: %s', self.node and self.node:type() or 'invalid', TSRegion.super.__tostring(self))
 end
@@ -380,7 +382,7 @@ do -- ### Wrapper for nil TSNode matches
 		return nr_index(self, key)
 	end
 
-	---@class manipulator.NilTSRegion: manipulator.TSRegion, manipulator.NilRegion
+	---@class manipulator.TSRegion.Nil: manipulator.TSRegion, manipulator.Region.Nil
 	---@protected
 	TSRegion.Nil = Region.class.Nil
 end
@@ -390,7 +392,7 @@ end
 ---@field range Range4 0-indexed range: {start_row, start_col, end_row, end_col}
 ---@field persistent? boolean should opts be saved as the default for the node (default: false)
 
---- Get a node covering given range. (end-column-exclusive -> use +1)
+--- Get a node spanning given range.
 ---@param opts manipulator.TSRegion.module.get.Opts
 ---@return manipulator.TSRegion?
 function M.get(opts)
@@ -400,6 +402,7 @@ function M.get(opts)
 	opts.buf = nil
 	if not ltree then return TSRegion:new(opts) end
 	local range = opts.range
+	range[4] = range[4] + 1
 	opts.range = nil
 	-- slow, but we have no other way to get the language info (and ltree) the node is in
 	if opts.langs then ltree = ltree:language_for_range(range) end

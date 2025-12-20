@@ -1,19 +1,28 @@
 ---@diagnostic disable: redefined-local
 
-local UTILS = require 'manipulator.utils'
-
 ---@class manipulator
+---@field batch manipulator.Batch
+---@field call_path manipulator.CallPath
+---@field region manipulator.Region
+---@field tsregion manipulator.TSRegion
 local M = {}
-M.config = {}
 
+---@class manipulator.Config
+---@field batch? manipulator.Batch.module.Config
+---@field call_path? manipulator.CallPath.Config
+---@field region? manipulator.Region.module.Config
+---@field tsregion? manipulator.TSRegion.module.Config
+
+---@param config? manipulator.Config
+---@return manipulator
 function M.setup(config)
-	if config then
-		M.config = config.inherit ~= false and UTILS.tbl_inner_extend('keep', config, M.config, true) or config
+	config = config or {}
+
+	for _, mod in ipairs { 'batch', 'call_path', 'region', 'tsregion' } do
+		M[mod] = require('manipulator.' .. mod).setup(config[mod])
 	end
 
-	for k, config in pairs(M.config) do
-		require('manipulator.' .. k).setup(config)
-	end
+	return M
 end
 
 return M

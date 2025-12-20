@@ -41,17 +41,13 @@ M.default_config = {
 	},
 
 	recursive_limit = 1000,
-
-	presets = {},
 }
 
 ---@type manipulator.Batch.module.Config
-M.config = UTILS.tbl_inner_extend('force', {}, M.default_config, true, 'noref')
-M.config.presets.active = M.config
-
+M.config = M.default_config
 ---@param config manipulator.Batch.module.Config
 function M.setup(config)
-	M.config = UTILS.expand_config(M.config.presets, M.default_config, config, Batch.opt_inheritance)
+	M.config = UTILS.module_setup({ active = M.config }, M.default_config, config, Batch.opt_inheritance)
 	return M
 end
 
@@ -100,7 +96,11 @@ function Batch:with(config, inplace)
 	return ret
 end
 
+---@param index integer for <0 returns values from the end
+---@return unknown
 function Batch:at(index) return self.items[index > 0 and index or #self.items + 1 + index] or self.Nil end
+---@return integer
+function Batch:length() return #self.items end
 
 ---@alias manipulator.Batch.Action (fun(item:manipulator.Region):manipulator.Region?)|manipulator.CallPath|string|string[]
 
