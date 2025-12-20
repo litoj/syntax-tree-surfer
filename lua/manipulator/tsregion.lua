@@ -178,7 +178,7 @@ function TSRegion:new(opts, node, ltree)
 	})
 end
 
-function TSRegion:range0() return { self.node:range() } end --NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
+function TSRegion:range1() return { NVIM_TS_UTILS.get_vim_range({ self.node:range() }, self.buf) } end
 
 function TSRegion:start() return { self.node:start() } end
 
@@ -451,10 +451,12 @@ end
 ---@field range? nil
 
 ---@param opts? manipulator.TSRegion.module.current.Opts persistent by default
+---   - `respect_linewise`: compared to `Region.current()` here defaults to `false`
 ---@return manipulator.TSRegion?
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
+	if opts.respect_linewise == nil then opts.respect_linewise = false end
 	local region, visual = Region.current(opts)
 	opts.mouse = nil
 	opts.visual = nil

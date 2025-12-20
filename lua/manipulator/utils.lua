@@ -207,7 +207,7 @@ do -- ### opts helpers
 			end
 		end
 
-		presets[true] = nil
+		presets[true] = nil -- avoid recursion and hence memory leaking
 		config.presets = super and presets or nil
 		return config
 	end

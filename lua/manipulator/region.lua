@@ -156,7 +156,7 @@ function Region:to_batch(x, ...)
 	return Batch.from(self, x, ...)
 end
 
----@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: true)
+---@param cut_to_range? boolean if false, returns entire lines the region is in (default: true)
 ---@return string[]
 function Region:get_lines(cut_to_range)
 	local lines = self.text and cut_to_range ~= false and vim.split(self.text, '\n') or self.lines
@@ -209,7 +209,7 @@ end
 
 ---@class manipulator.Region.jump.Opts
 ---@field end_? boolean if the cursor should jump to the end of the selection (applied only when not in visual mode already) (default: true)
----@field rangemod? false|fun(self:manipulator.Region):Range4 transform the range of the region before manipulation (default: trims whitespace)
+---@field rangemod? false|fun(self:manipulator.Region):Range4 transform the range of the region before manipulation (default: trim whitespace)
 ---@field insert? boolean should we enter insert mode (default: false)
 
 --- Jump to the start (or end, if `opts.end_`) of the region.
@@ -288,39 +288,58 @@ end
 
 --- Paste like with visual mode motions - prefer using vim motions
 ---@param opts manipulator.Region.paste.Opts
+---@return manipulator.Region # region of the pasted text
 function Region:paste(opts)
 	opts = self:action_opts(opts, 'paste')
 	local buf, range = RANGE_UTILS.decompose(opts.dst or self, true)
-	local text = opts.text
-	if not text then
-		text = self:get_text()
-	elseif #text == 2 and text:sub(1, 1) == '"' then
-		text = vim.fn.getreg(text:sub(2, 2))
-		if not text then
-			vim.notify('Register ' .. opts.text:sub(2, 2) .. ' is empty', vim.log.levels.INFO)
-			return
-		end
-	end
 	if not buf or not range[1] then
 		vim.notify('Invalid dst to paste to', vim.log.levels.INFO)
-		return
+		return self.Nil
+	end
+	local text = opts.text
+	if not text and opts.dst then
+		text = self:get_text()
+	elseif not text or text:match '^".$' then
+		local reg = text and text:sub(2, 2) or vim.v.register
+		text = vim.fn.getreg(reg)
+
+		if not text then
+			vim.notify('Register ' .. reg .. ' is empty', vim.log.levels.INFO)
+			return self.Nil
+		end
 	end
 
-	if opts.linewise then -- mode='over' doesn't make sense here, so we ignore it
-		if opts.mode == 'after' then range[1] = range[3] + 1 end
-		range[3] = range[1]
-		range[2] = 0
-		range[4] = 0
-		text = text .. '\n'
-	elseif opts.mode == 'before' then
-		range[3] = range[1]
-		range[4] = range[2]
-	elseif opts.mode == 'after' then
-		range[1] = range[3]
-		range[2] = range[4]
-	end -- else mode = 'over'
+	if opts.linewise then
+		if (opts.mode or 'over') == 'over' then
+			-- if we're not replacing the line fully, make sure to insert on a fully separate line
+			if range[2] > 0 then text = '\n' .. text end
+			if range[4] < #vim.api.nvim_buf_get_lines(buf, range[3], range[3] + 1, true)[1] - 1 then
+				text = text .. '\n'
+			end
+		else
+			if opts.mode == 'after' then range[1] = range[3] + 1 end
+			range[3] = range[1]
+			range[2] = 0
+			range[4] = -1
+			text = text .. '\n'
+		end
+	else
+		if opts.mode == 'before' then
+			range[3] = range[1]
+			range[4] = range[2] - 1
+		elseif opts.mode == 'after' then
+			range[1] = range[3]
+			range[2] = range[4] + 1
+		end -- else mode = 'over'
+	end
 
-	vim.lsp.util.apply_text_edits({ { range = RANGE_UTILS.lsp_range(range), newText = text } }, buf, 'utf-8')
+	vim.lsp.util.apply_text_edits({
+		{ range = RANGE_UTILS.lsp_range(range), newText = text },
+	}, buf, 'utf-8')
+
+	local ret = M.from_text(text, range, true)
+	ret.buf = self.buf
+	return ret
 end
 
 ---@class manipulator.Region.swap.Opts
@@ -495,6 +514,7 @@ do -- ### Wrapper for nil matches
 	local NilRegion = { range = {} }
 	function NilRegion:clone() return self end -- nil is only one
 	NilRegion.with = NilRegion.clone
+	NilRegion.paste = NilRegion.clone
 	function NilRegion:__tostring() return 'Nil' end
 	-- allow queue_or_run() to deselect the group and collect() to return an empty Batch
 	local passthrough = {
@@ -517,10 +537,25 @@ end
 ---@return manipulator.Region
 function M.from(range) return Region:new(range) end
 
+---@param text string
+---@param offset? Range2
+---@param ignore_eol? boolean if last newline should not count as another line (default: true)
+---@return manipulator.Region
+function M.from_text(text, offset, ignore_eol)
+	-- TODO: correctly should set the whole object as linewise
+	if ignore_eol ~= false and text:sub(#text) == '\n' then text = text:sub(1, #text - 1) end
+	local lines = vim.split(text, '\n')
+	offset = offset or { 0, 0 }
+	offset[3] = offset[1] + #lines - 1
+	offset[4] = (#lines == 1 and offset[2] or 0) + #lines[#lines] - 1
+	return Region:new { range = offset, lines = lines, text = text }
+end
+
 ---@class manipulator.Region.module.current.Opts options for retrieving various kinds of user position
 ---@field mouse? boolean if the event is a mouse click
 ---@field visual? boolean|manipulator.VisualModeEnabler map of modes for which to return visual range, false to get a cursor/mouse only
----@field insert_fixer? string luapat to match the char under cursor to determine if c-1 column should be used when in 'i'/'s' mode
+---@field respect_linewise? boolean should the region be full lines when in 'V' mode (default: true)
+---@field insert_fixer? string|false luapat to match the char under cursor to determine if c-1 column should be used when in 'i'/'s' mode
 
 --- Get mouse click position or currently selected region and cursor position
 ---@param opts? manipulator.Region.module.current.Opts use {} for disabling visual mode
@@ -530,6 +565,10 @@ function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
 	local range = opts.visual ~= false and RANGE_UTILS.current_visual(opts.visual, opts.insert_fixer)
+	if range and vim.fn.mode() == 'V' and opts.respect_linewise ~= false then
+		range[2] = 0
+		range[4] = #vim.api.nvim_buf_get_lines(0, range[3], range[3] + 1, true)[1] - 1
+	end
 	return M.from(range or RANGE_UTILS.current_point(opts.mouse, opts.insert_fixer)), not not range
 end
 

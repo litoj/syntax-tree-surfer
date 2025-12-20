@@ -22,7 +22,7 @@ do -- ### Range converions
 		return buf, range.range or (range.range0 and range:range0()) or range
 	end
 
-	---@param range Range4 0-indexed range
+	---@param range Range4 0-indexed range, end inclusive
 	function M.lsp_range(range)
 		return {
 			start = { line = range[1], character = range[2] },
@@ -79,8 +79,7 @@ do -- ### Comparators
 	---@return integer # comparison of the ends
 	function M.cmpRange(a, b)
 		return a[1] == b[1] and a[2] - b[2] or a[1] - b[1],
-			b[3] and (a[3] == b[3] and a[4] - b[4] or a[3] - b[3])
-				or (a[3] == b[1] and a[4] - b[2] or a[3] - b[1])
+			b[3] and (a[3] == b[3] and a[4] - b[4] or a[3] - b[3]) or (a[3] == b[1] and a[4] - b[2] or a[3] - b[1])
 	end
 
 	---@param a Range4
@@ -97,11 +96,7 @@ do -- ### Comparators
 	---@return Range2? position to the closer edge, or `nil` if point is more than 1 col outside range
 	---@return boolean? end if the closer edge is the end of the range
 	function M.posInRange(r, p, tolerate_end_by_1)
-		if
-			M.cmpPoint(p, r) < 0 or M.cmpPoint(p, { r[3], r[4] + (tolerate_end_by_1 and 1 or 0) }) > 0
-		then
-			return
-		end
+		if M.cmpPoint(p, r) < 0 or M.cmpPoint(p, { r[3], r[4] + (tolerate_end_by_1 and 1 or 0) }) > 0 then return end
 
 		if p[1] ~= r[3] or p[2] - r[4] < 0 then -- if not very near the end default to start
 			return {
@@ -145,15 +140,10 @@ do -- ### Current state helpers
 	---@return Range2 point
 	function M.fix_end(buf, point, pattern)
 		if point[2] == 0 then return point end
-		local char = vim.api
-			.nvim_buf_get_lines(buf, point[1], point[1] + 1, true)[1]
-			:sub(point[2] + 1, point[2] + 1)
+		local char = vim.api.nvim_buf_get_lines(buf, point[1], point[1] + 1, true)[1]:sub(point[2] + 1, point[2] + 1)
 		if
 			char == ''
-			or (
-				pattern ~= false
-				and char:match(type(pattern) == 'string' and pattern or M.false_end_in_insert)
-			)
+			or (pattern ~= false and char:match(type(pattern) == 'string' and pattern or M.false_end_in_insert))
 		then
 			point[2] = point[2] - 1
 		end
@@ -231,10 +221,10 @@ do -- ### Current state helpers
 	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
 
 	---@param v_modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
-	---@param fix_end? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
+	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
 	---@return Range4? 0-indexed
 	---@return boolean? leading if cursor was at the beginning of the current selection
-	function M.current_visual(v_modes, fix_end)
+	function M.current_visual(v_modes, insert_fixer)
 		v_modes = type(v_modes) == 'table' or { v = true, V = true, ['\022'] = true, s = true }
 		local mode = vim.fn.mode()
 		if not v_modes[mode] then return end
@@ -254,8 +244,8 @@ do -- ### Current state helpers
 			to[3] - 1,
 		}
 
-		if fix_end ~= false then -- all visual modes can select the EOL
-			local tmp = M.fix_end(0, { range[3], range[4] }, mode == 's' and (fix_end or true) or false)
+		if insert_fixer ~= false then -- all visual modes can select the EOL
+			local tmp = M.fix_end(0, { range[3], range[4] }, mode == 's' and (insert_fixer or true) or false)
 			range[4] = tmp[2]
 		end
 
@@ -263,9 +253,9 @@ do -- ### Current state helpers
 	end
 
 	---@param mouse? boolean if mouse or cursor position should be retrieved
-	---@param fix_end? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
+	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
 	---@return manipulator.BufRange
-	function M.current_point(mouse, fix_end)
+	function M.current_point(mouse, insert_fixer)
 		local ret
 		if mouse then
 			local m = vim.fn.getmousepos()
@@ -278,8 +268,15 @@ do -- ### Current state helpers
 			ret = { buf = 0, range = vim.api.nvim_win_get_cursor(0) }
 			ret.range[1] = ret.range[1] - 1
 			local mode = vim.fn.mode()
-			if mode ~= 'n' and fix_end ~= false then -- ensure we're not selecting eol
-				M.fix_end(ret.buf, ret.range, (mode == 'i' or mode == 's') and (fix_end or true) or false)
+
+			if mode ~= 'n' and insert_fixer ~= false then -- ensure we're not selecting eol
+				M.fix_end(ret.buf, ret.range, (mode == 'i' or mode == 's') and (insert_fixer or true) or false)
+			end
+
+			if mode == 'i' then
+				ret.range[3] = ret.range[1]
+				ret.range[4] = ret.range[2] - 1
+				return ret
 			end
 		end
 
