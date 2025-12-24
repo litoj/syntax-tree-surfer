@@ -40,7 +40,7 @@ M.default_config = {
 		callback = false,
 	},
 
-	recursive_limit = 1000,
+	recursive_limit = 500,
 }
 
 ---@type manipulator.Batch.module.Config
@@ -106,9 +106,9 @@ function Batch:length() return #self.items end
 
 ---@param action manipulator.Batch.Action
 ---@return fun(item):unknown
-local function action_to_fn(action)
+function M.action_to_fn(action)
 	return type(action) == 'function' and action
-		or action.path and function(x) return action:exec(x) end -- manipulator.CallPath
+		or action.path and function(x) return action:exec { src = x } end -- manipulator.CallPath
 		or (not action[1] and function(x) return x[action](x) end) -- string
 		or function(x) -- string[]
 			for _, a in ipairs(action) do
@@ -121,7 +121,7 @@ end
 ---@param action manipulator.Batch.Action
 ---@return manipulator.Batch self
 function Batch:apply(action)
-	action = action_to_fn(action)
+	action = M.action_to_fn(action)
 	for _, item in ipairs(self.items) do
 		action(item)
 	end
@@ -130,13 +130,13 @@ function Batch:apply(action)
 end
 
 --- Presumes the items are Region items that can be added to the quickfix window
----@param action? 'a'|'r' `vim.fn.setqflist` action to perform - append or replace (default: 'r')
-function Batch:to_qf(action)
+---@param mode? 'a'|'w' `vim.fn.setqflist` action to perform - append or overwrite (default: 'w')
+function Batch:to_qf(mode)
 	local list = {}
 	for _, item in ipairs(self.items) do
 		list[#list + 1] = item:as_qf_item()
 	end
-	vim.fn.setqflist(list, action or 'r')
+	vim.fn.setqflist(list, mode or 'w')
 
 	return self
 end
@@ -148,7 +148,7 @@ end
 function Batch:map(...)
 	local items = {}
 	for _, action in ipairs { ... } do
-		action = action_to_fn(action)
+		action = M.action_to_fn(action)
 		for _, item in ipairs(self.items) do
 			for _, res in ipairs { action(item) } do
 				items[#items + 1] = res
@@ -178,7 +178,7 @@ end
 ---@field autoselect_single? boolean should we automatically return the first item if it is the ony one in the list
 ---@field fzf_resolve_timeout? integer how long (in ms) to wait for fzf to pass the result to the callback after the fzf window closes (default: 100)
 
--- TODO: add picker based on pressing a character in the buffer (like sts, autopairs...)
+-- TODO: add picker based on pressing a character in the buffer (like sts/autopairs/flash)
 
 --- Pick from the items. Must be in a coroutine or use a callback.
 ---@param self manipulator.Batch
@@ -203,8 +203,8 @@ function Batch:pick(opts)
 		pick = require('manipulator.call_path'):new { immutable = false, exec_on_call = false }
 		callback = function(result)
 			pick.item = result
-			pick.exec_on_call = 10 -- in case the full path hasn't been constructed yet (unlikely)
-			pick:exec(true) -- run the planned execution
+			pick.config.exec_on_call = 10 -- in case the full path hasn't been constructed yet (unlikely)
+			pick:exec { src = 'update' } -- run the planned execution
 		end
 	elseif not callback then
 		co = coroutine.running()
@@ -312,7 +312,7 @@ function M.from(src, ...)
 	local Nil = src.Nil
 
 	for _, action in ipairs(actions) do -- for each action
-		action = action_to_fn(action)
+		action = M.action_to_fn(action)
 		acc[#acc + 1] = action(src)
 	end
 
@@ -320,13 +320,13 @@ function M.from(src, ...)
 end
 
 ---@param src manipulator.Region|{Nil:table|false}
----@param limit_or_fn integer|manipulator.Batch.Action
+---@param limit integer|'vimcount' max iterations total (-1= `M.config.recursive_limit`)
 ---@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
 ---@return manipulator.Batch
-function M.from_recursive(src, limit_or_fn, ...)
+function M.from_recursive(src, limit, ...)
 	if not src or src == src.Nil then return Batch:new(M.config, {}, src and src.Nil or false) end
-	local limit = type(limit_or_fn) == 'number' and limit_or_fn or M.config.recursive_limit
-	local actions = type(limit_or_fn) ~= 'number' and { limit_or_fn, ... } or { ... }
+	limit = limit == -1 and M.config.recursive_limit or (limit == 'vimcount' and vim.v.count1 or limit)
+	local actions = { ... }
 
 	-- rawget to bypass CallPath modifications
 	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
@@ -334,7 +334,7 @@ function M.from_recursive(src, limit_or_fn, ...)
 	local Nil = src.Nil
 
 	for _, action in ipairs(actions) do -- for each action
-		action = action_to_fn(action)
+		action = M.action_to_fn(action)
 		local item = action(src)
 		while item and item ~= Nil and limit > 0 do -- collect nodes while we can apply the action on the consecutive result
 			acc[#acc + 1] = item

@@ -18,6 +18,7 @@ TSRegion.__index = TSRegion
 ---@field types? manipulator.Enabler|{inherit:boolean|string} which types of nodes to accept, which to ignore (if previous node of identical range not accepted) + if it should inherit previous/preset values
 ---@field langs? false|manipulator.Enabler|{inherit:boolean|string} which languages to accept (false to disable LanguageTree switching) (seeking further in the direction if not accepted (parent or child))
 ---@field nil_wrap? boolean if nodes should return a nil node wrapper instead of nil (for method chaining)
+---@field save_as? false|string a non-inheritable setting to save the expanded opts into a preset
 
 ---@class manipulator.TSRegion.Config: manipulator.TSRegion.Opts, manipulator.Region.Config
 ---@field parent? manipulator.TSRegion.Opts
@@ -81,7 +82,7 @@ M.default_config = {
 	next = { allow_child = true, start_point = 'cursor' },
 	prev = {},
 
-	current = { ignore_linewise = true, on_partial = 'larger' },
+	current = { linewise = 'ignore', on_partial = 'larger' },
 
 	nil_wrap = true,
 	inherit = false,
@@ -149,11 +150,27 @@ local function get_ft_config(expanded, buf)
 	return expanded and UTILS.expand_config(M.config.presets, M.config, bp, TSRegion.opt_inheritance) or bp
 end
 
+M.debug = false ---@type false|vim.log.levels
+
 ---@override
 function TSRegion:action_opts(opts, action)
-	return activate_enablers(
+	if type(opts) == 'table' and opts.save_as then
+		M.config.presets[opts.save_as] = opts
+		opts.save_as = nil
+	end
+
+	opts = activate_enablers(
 		UTILS.get_opts_for_action(self.config or get_ft_config(true, self.buf), opts, action, self.opt_inheritance)
 	)
+
+	if M.debug then
+		local presets = opts.presets
+		opts.presets = nil
+		vim.notify(vim.inspect { action = action, opts = opts }, M.debug)
+		opts.presets = presets
+	end
+
+	return opts
 end
 
 --- Create a new language-tree node wrapper.

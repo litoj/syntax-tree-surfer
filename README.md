@@ -6,26 +6,26 @@
 - treesitter full traversal including injected languages
   - filtering by node type and lang
 - position sources: cursor, selection, mouse click/move (via `vim.g.mousemoveevent`)
-- vim motion support (`5j`…) (via `CallPath:next_with_count`)
+- vim motion support (`5j`…) (via `CallPath:with_count`)
+- dot repeat / operator mode (via `CallPath:as_op`)
 - `Batch`: collecting and selecting (native or `fzf`) found matches
 - extensive behaviour configuration with clever preset inheriting
 - `CallPath`: flexible & reusable keymapping function builder
-- extensive luadocs right in the code
+- extensive docs right in the code for all settings and methods
 
 ## TODOS
 
 - update docs & license, separate repo from the original but include references
-  - add example under each feature
-  - make features into ### headings, do
-- TODO: add info/gtdefinition for types in info windows - _belongs to reform.nvim_
-- TODO: matching by query syntax and catching into groups
-- TODO: add selection modification/filter (include trailing comma etc.)
+  - make features into ### headings
+  - add example under each feature, provide settings
+  - TOC up top
+- add info/gtdefinition for types in info windows - _belongs to reform.nvim_
+- matching by query syntax and catching into groups
+- add selection modification/filter (include trailing comma etc.)
   - possible, but currently no predefined list of filters, could use presets to add them
-- TODO: add wrapper for dot repeat
-- TODO: `<num>gc<X>` mappings (snf = select next function, gnn = jump next node)...
+- examples of operators (snf = select next function, gnn = jump next node)...
   - either callpath extension or type presets (f/a/s/c/l…) for the letters
-- TODO: region operators (text concat -> new region update etc.)
-  - one method with `str,R,str | R,str | str,R` generating a correctly updated region
+- refactor swap to allow swapping parent and child (conditionals)
 
 ### Syntax Tree Surfer is a plugin for Neovim that helps you surf through your document and move elements around using the nvim-treesitter API.
 
@@ -40,18 +40,6 @@
 1. [Version 2.2 Update](#version-22-update)
 
 # Version 1.0 Functionalities
-
-### **Navigate** around your document based on Treesitter's abstract Syntax Tree. Step into, step out, step over, step back.
-
-https://user-images.githubusercontent.com/102876811/163170843-a7c9f1a1-4ffb-4a39-9636-fc81521bd9b5.mp4
-
----
-
-### **Move / Swap** elements around based on your visual selection
-
-<!-- https://user-images.githubusercontent.com/102876811/163171460-4620be6b-360f-4d39-b025-55c412f54a96.mp4 -->
-
-https://user-images.githubusercontent.com/102876811/163171686-4ad49b7a-9fd3-41d5-a2c2-deae1bb41c3d.mp4
 
 ### **Swap in Normal Mode** - Now supports Dot (.) Repeat
 

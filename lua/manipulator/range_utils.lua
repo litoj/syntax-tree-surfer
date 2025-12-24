@@ -126,7 +126,9 @@ do -- ### Current state helpers
 		local lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
 
 		if cut_to_range ~= false then
-			if #lines == 1 then
+			if range[4] == math.huge then -- never use floats - not usable in the api
+				range[4] = #lines[#lines] -- no len-1 to mark it as end-inclusive
+			elseif #lines == 1 then
 				lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
 			else
 				lines[1] = lines[1]:sub(range[2] + 1)
@@ -228,8 +230,9 @@ do -- ### Current state helpers
 	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
 	---@return Range4? 0-indexed
 	---@return boolean? leading if cursor was at the beginning of the current selection
+	---@return manipulator.VisualMode? mode
 	function M.current_visual(v_modes, insert_fixer)
-		v_modes = type(v_modes) == 'table' or { v = true, V = true, ['\022'] = true, s = true }
+		if type(v_modes) ~= 'table' then v_modes = { v = true, V = true, ['\022'] = true, s = true } end
 		local mode = vim.fn.mode()
 		if not v_modes[mode] then return end
 
@@ -253,7 +256,7 @@ do -- ### Current state helpers
 			range[4] = tmp[2]
 		end
 
-		return range, leading
+		return range, leading, mode
 	end
 
 	---@param mouse? boolean if mouse or cursor position should be retrieved

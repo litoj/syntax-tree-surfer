@@ -37,7 +37,7 @@ end
 
 ---@private
 ---@class manipulator.CallPath.CallInfo
----@field field? string what method to call on the object (else call the object directly)
+---@field fn? string|fun(x:any,...):any what method to call/apply on the object (else call the object directly)
 ---@field as_motion? manipulator.MotionOpt when applying `vim.v.count`-times what to do on nil
 ---@field args? unknown[] what arguments to run the method with
 ---@field anchor? string if the object is an anchor and not part an actual call
@@ -48,9 +48,7 @@ end
 ---| number # in ms until actual execution - updates itself,
 ---| false # to not execute until manual call of `:exec()` (the default),
 ---| true # to `:exec()` calls immediately - returns a new wrapper.
----@field allow_shorter_motion? boolean should we use the last valid motion iteration or produce an error when the motion cannot be repeated anymore (reached end of document)
----@field allow_direct_calls? boolean should arguments for direct calls on the wrapped object be executed or produce an error
----@field skip_anchors? boolean should any anchored path be skipped or produce an error
+---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
 ---@class manipulator.CallPath
@@ -91,10 +89,12 @@ M.default_config = {
 	immutable = true,
 	exec_on_call = false,
 
-	allow_shorter_motion = true,
-	allow_direct_calls = false,
-	skip_anchors = true,
-
+	exec = {
+		allow_shorter_motion = true,
+		allow_direct_calls = false,
+		allow_field_access = false,
+		skip_anchors = true,
+	},
 	as_op = { keep_visual = false, no_expr_opts = true },
 }
 
@@ -105,6 +105,18 @@ M.config = M.default_config
 function M.setup(config)
 	M.config = UTILS.expand_config({ active = M.config }, M.default_config, config, {})
 	return M
+end
+
+--- Get **immutable** options for the given actions from current config
+---@generic O
+---@param opts? `O` user options to get expanded - updated **inplace**
+---@param action string
+---@return O # opts expanded for the given method
+function CallPath:action_opts(opts, action)
+	return self.config[action]
+			and (opts and UTILS.tbl_inner_extend('keep', opts, self.config[action]) or self.config[action])
+		or opts
+		or {}
 end
 
 ---@param o? manipulator.CallPath.Config|{item?: table} clones itself if {item} is not provided
@@ -135,6 +147,7 @@ end
 local PathAnchor = { __index = function() return 1 end }
 
 ---@private
+---@param key string|fun(x:any,...):any
 function CallPath:__index(key)
 	if CallPath[key] then return CallPath[key] end
 	if key == 'fn' then -- allow delayed method call via static reference (inject self)
@@ -145,7 +158,7 @@ function CallPath:__index(key)
 
 	if self.config.immutable then self = self:new() end
 
-	local k1 = #key > 1 and key:sub(1, 1) or ''
+	local k1 = type(key) == 'string' and #key > 1 and key:sub(1, 1) or ''
 	if k1 == '&' then -- placeholder set (reference/ptr)
 		--- Create an anchor object that looks like a fully setup object
 		self:_add_to_path(setmetatable({ anchor = key:sub(2) }, PathAnchor))
@@ -162,7 +175,7 @@ function CallPath:__index(key)
 
 		error('Unknown anchor ' .. k1)
 	else -- path addition
-		self:_add_to_path { field = key, as_motion = rawget(self, 'next_as_motion') }
+		self:_add_to_path { fn = key, as_motion = rawget(self, 'next_as_motion') }
 		self.next_as_motion = nil
 
 		if key == 'pick' then self.needs_coroutine = true end -- `Batch.pick` direct integration
@@ -170,17 +183,56 @@ function CallPath:__index(key)
 	return self
 end
 
---- Allow the next index (call) to be repeated `vim.v.count1`-times.
+---@private
+function CallPath:__call(a1, ...)
+	local args = a1 and (getmetatable(a1) == CallPath) and { ... } or { a1, ... }
+
+	if self.config.immutable then self = self:new() end
+
+	local call = self.path[self.idx]
+
+	if call and not call.args then -- count-enabled call
+		self.path[self.idx] = UTILS.tbl_inner_extend('keep', { args = args }, call)
+		-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
+		if call.fn == 'pick' and args[1] and args[1].callback then self.needs_coroutine = nil end
+	else -- call of the wrapped object directly
+		self:_add_to_path { args = args }
+	end
+
+	if self.config.exec_on_call then -- check autoexec settings
+		if self.config.exec_on_call == true then
+			self:exec { src = 'update' }
+		else
+			vim.defer_fn(function() self:exec { src = 'update' } end, self.config.exec_on_call)
+		end
+	end
+
+	return self
+end
+
+--- Allow the {target} to be repeated `vim.v.count1`-times.
 --- NOTE: anchores are ignored -> if it is followed by an anchor and
 --- then an index that index will get marked as a motion.
 ---
---- Type annotation commented, until lsp_lua figures out inheritance
---- - `on_fail?` (`manipulator.MotionOpt`): if we should inform the user about failing to do enough
----   interations, or carry on (accepting the last good value or giving an error)
-function CallPath:next_with_count(on_fail)
+--- NOTE: Type annotation commented, until lsp_lua fixes inheritance in generics
+---
+--[[ ---@generic P: manipulator.CallPath
+---@param self `P`
+---@param target manipulator.Batch.Action|'on_next' what to apply the count onto
+---@param on_fail? manipulator.MotionOpt if we should inform the user about failing to do enough
+---   interations, or carry on (accepting the last good value or giving an error) (default: 'ignore')
+---@return `P` self copy ]]
+function CallPath:with_count(target, on_fail)
 	if self.config.immutable then self = self:new() end
 
-	self.next_as_motion = UTILS.get_or(on_fail, 'print') or 'ignore'
+	local as_motion = UTILS.get_or(on_fail, 'print') or 'ignore'
+	if target == 'on_next' then
+		self.next_as_motion = as_motion
+	elseif target then
+		self:_add_to_path { fn = target, as_motion = as_motion }
+	else
+		error 'Param `target` is required'
+	end
 	return self
 end
 
@@ -193,7 +245,7 @@ end
 ---@param opts? manipulator.CallPath.as_op.Opts
 ---@return function
 function CallPath:as_op(opts)
-	opts = UTILS.tbl_inner_extend('keep', opts or {}, self.config.as_op or {})
+	opts = self:action_opts(opts, 'as_op')
 
 	return function()
 		local mode = vim.fn.mode()
@@ -219,110 +271,98 @@ function CallPath:as_op(opts)
 	end
 end
 
----@private
-function CallPath:__call(a1, ...)
-	local args = a1 and (getmetatable(a1) == CallPath) and { ... } or { a1, ... }
+---@class manipulator.CallPath.exec.Opts
+---@field allow_shorter_motion? boolean should we use the last valid motion iteration or produce an error when the motion cannot be repeated anymore (reached end of document)
+---@field allow_direct_calls? boolean should arguments for direct calls on the wrapped object be executed or produce an error
+---@field allow_field_access? boolean should paths that don't lead to a function be considered a simple field access
+---@field skip_anchors? boolean should any anchored path be skipped or produce an error
+---@field src? # modifications to the object to run the path on (default: self.item)
+---| 'update' # the result should replace the object, reseting the path to {}
+---| table|userdata # run the path on the given object
 
-	if self.config.immutable then self = self:new() end
-
-	local call = self.path[self.idx]
-
-	if call and not call.args then -- count-enabled call
-		self.path[self.idx] = UTILS.tbl_inner_extend('keep', { args = args }, call)
-		-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
-		if call.field == 'pick' and args[1] and args[1].callback then self.needs_coroutine = nil end
-	else -- call of the wrapped object directly
-		self:_add_to_path { args = args }
-	end
-
-	if self.config.exec_on_call then -- check autoexec settings
-		if self.config.exec_on_call == true then
-			self:exec(true)
-		else
-			vim.defer_fn(function() self:exec(true) end, self.config.exec_on_call)
-		end
-	end
-
-	return self
-end
-
----@param inplace? boolean|table|userdata if the result should replace the object, reseting the path to {}
---- - alternatively can run the path on the given object as if inplace=false
-function CallPath:exec(inplace)
+---@param opts? manipulator.CallPath.exec.Opts
+---@return any
+function CallPath:exec(opts)
 	if rawget(self, 'needs_coroutine') then
 		local co = coroutine.running()
 		if not co then
-			return coroutine.wrap(function() return self:_exec(inplace) end)()
+			return coroutine.wrap(function() return self:_exec(opts) end)()
 		end
 	end
-	return self:_exec(inplace)
+	return self:_exec(opts)
 end
 
 ---@private
-function CallPath:_exec(inplace)
-	if inplace == true then
+---@param opts? manipulator.CallPath.exec.Opts
+function CallPath:_exec(opts)
+	opts = self:action_opts(opts, 'exec')
+
+	if opts.src == 'update' then
 		if self.running then return end -- basic attempt for async locking
 		self.running = true
-	elseif inplace then
+	elseif opts.src then
 		self.backup = self.item
-		self.item = inplace
+		self.item = opts.src
 	end
 
 	local item = self.item
 	for _, call in ipairs(self.path) do
-		if not rawget(call, 'field') then -- raw to skip anchor metatables
-			if rawget(call, 'args') then -- call the object directly
-				if not self.config.allow_direct_calls then
-					error('CallPath direct calls are not allowed: ' .. vim.inspect(self.path))
+		if type(call.fn) ~= 'string' and type(call.fn) ~= 'function' then -- ## no object access
+			if rawget(call, 'args') then -- directly call the object
+				if not opts.allow_direct_calls then
+					error('CallPath direct calls are not allowed: ' .. tostring(self))
 				end
 				item = item(unpack(call.args))
-			elseif not self.config.skip_anchors then
-				error('CallPath anchor skipping not allowed: ' .. vim.inspect(self.path))
+			elseif not opts.skip_anchors then
+				error('CallPath anchor skipping not allowed: ' .. tostring(self))
 			end
-		else
-			if call.args or call.as_motion then -- method call
-				if not call.as_motion or vim.v.count1 == 1 then
-					item = item[call.field](item, unpack(call.args or {}))
-				else -- vim motion - run for multiple iterations
-					local args = call.args or {}
-					local fn = call.field
-					local batch = Batch.from_recursive(
-						item,
-						vim.v.count1,
-						function(item) return item[fn](item, unpack(args)) end
-					)
+		else -- ## field or function
+			local fn = type(call.fn) == 'function' and call.fn or item[call.fn]
 
-					local len = batch:length()
-					if len == vim.v.count1 then
+			if not fn then
+				error("CallPath found no field '" .. call.fn .. "': " .. tostring(self))
+			elseif type(fn) ~= 'function' and not getmetatable(fn).__call then -- simple field access
+				if call.args or call.as_motion or not opts.allow_field_access then
+					error('CallPath item field ' .. call.fn .. ' is not callable: ' .. tostring(self))
+				else
+					item = fn
+				end
+			elseif not call.args and not call.as_motion then -- ### method without args
+				item = fn(item)
+			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call
+				item = fn(item, unpack(call.args or {}))
+			else -- ### vim motion - run for multiple iterations
+				local batch = Batch.from_recursive(
+					item,
+					vim.v.count1,
+					function(item)
+						return (type(call.fn) == 'function' and call.fn or item[call.fn])(item, unpack(call.args or {}))
+					end
+				)
+
+				local len = batch:length()
+				if len == vim.v.count1 then
+					item = batch:at(len)
+				else
+					if call.as_motion == 'print' then vim.notify('Got to count: ' .. len, vim.log.levels.INFO) end
+
+					if opts.allow_shorter_motion and len > 0 then
 						item = batch:at(-1)
 					else
-						if call.as_motion == 'print' then vim.notify('Got to count: ' .. len, vim.log.levels.INFO) end
-
-						if self.config.allow_shorter_motion and len > 0 then
-							item = batch:at(-1)
-						else
-							if call.as_motion == 'print' then break end
-							error('CallPath iteration count not satisfied: ' .. len)
-						end
+						if call.as_motion == 'print' then break end
+						error('CallPath iteration count not satisfied: ' .. len)
 					end
-				end
-			else -- field access or method call
-				local field = item[call.field]
-				if type(field) == 'function' or getmetatable(field).__call then
-					item = field(item) -- method without args
-				else
-					item = field -- simple field access
 				end
 			end
 		end
 	end
 
-	if inplace == true then
+	if opts.src == 'update' then
 		self.item = item
 		self.path = {}
 		self.needs_coroutine = nil -- all steps processed -> async was also processed
 		self.running = false
-	elseif inplace then
+	elseif opts.src then
 		self.item = self.backup
 		self.backup = nil
 	end
