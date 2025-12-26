@@ -13,8 +13,8 @@ local M = {
 do -- ### Range converions
 	---@param range manipulator.RangeType any 0-indexed range
 	---@param explicit_buf? boolean if true replace buf=0 with actual bufnr
-	---@return integer
-	---@return Range4|{} 0-indexed buffer number and range or an empty table
+	---@return integer buf
+	---@return Range4|{} # 0-indexed buffer number and range or an empty table
 	function M.decompose(range, explicit_buf)
 		local buf = range.buf or 0
 		if explicit_buf and buf == 0 then buf = vim.api.nvim_get_current_buf() end
@@ -117,6 +117,8 @@ do -- ### Comparators
 end
 
 do -- ### Current state helpers
+	--- Get the text of the given range
+	--- NOTE: to include the EOL don't use `math.huge` but `vim.v.maxcol`!!!
 	---@param region manipulator.RangeType
 	---@param cut_to_range? boolean if true, disable truncating lines to match size precisely (default: true)
 	---@return string[]
@@ -126,9 +128,7 @@ do -- ### Current state helpers
 		local lines = vim.api.nvim_buf_get_lines(buf, range[1], range[3] + 1, true)
 
 		if cut_to_range ~= false then
-			if range[4] == math.huge then -- never use floats - not usable in the api
-				range[4] = #lines[#lines] -- no len-1 to mark it as end-inclusive
-			elseif #lines == 1 then
+			if #lines == 1 then
 				lines[1] = lines[1]:sub(range[2] + 1, range[4] + 1)
 			else
 				lines[1] = lines[1]:sub(range[2] + 1)
@@ -172,123 +172,100 @@ do -- ### Current state helpers
 		vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
 	end
 
-	---@param region manipulator.RangeType
-	---@return Range4 # 0-indexed range of the region trimmed to the
-	function M.get_trimmed_range(region)
-		local _, range = M.decompose(region)
-		local lines = M.get_lines(region)
+	---@alias pos_expr 'mouse'|"'x"|'.'|'v'|"'["|"']"|"'<"|"'>"|string
 
-		-- Trim leading whitespace
-		local s_l = 1
-		local s_c = range[2]
-		while s_l <= #lines do
-			local line = lines[s_l]
-			local len = #(line:match '^%s*')
+	---@see vim.fn.getpos
+	---@param expr pos_expr expr for vim.fn.getpos or 'mouse' for mouse pos
+	---@return Range2 point or an error, if the mark doesn't exist
+	---@return integer? buf
+	function M.get_point(expr)
+		-- vim.fn.getpos can parse all inputs, but is half as fast
+		if #expr == 2 or expr == '.' then
+			local r = expr == '.' and vim.api.nvim_win_get_cursor(0) or vim.api.nvim_buf_get_mark(0, expr:sub(2))
+			if r[1] == 0 then error('No position for: ' .. expr) end
+			r[1] = r[1] - 1
+			return r, 0
+		elseif expr == 'mouse' then
+			local m = vim.fn.getmousepos()
+			return { m.line - 1, m.column - 1 }, vim.api.nvim_win_get_buf(m.winid)
+		else
+			local r = vim.fn.getpos(expr)
+			local buf = r[1]
+			r[1] = r[2] - 1
+			r[2] = r[3] - 1
+			r[3] = nil
+			return r, buf
+		end
+	end
 
-			if len >= #line then
-				s_l = s_l + 1
-				s_c = 0
-			else
-				s_c = s_c + len
-				break
-			end
+	--- Get a range from the current buffer
+	---@see manipulator.range_utils.get_point
+	---@param s_expr pos_expr
+	---@param e_expr? pos_expr
+	---@param order? boolean should we reorder the expressions to ensure s<e
+	---@return Range4 range
+	---@return integer buf buffer of the s_expr
+	---@return boolean swapped if the order of expressions was changed to make a positive range
+	function M.get_range(s_expr, e_expr, order)
+		local from, buf = M.get_point(s_expr)
+		local to = e_expr and M.get_point(e_expr) or from
+
+		local swapped = false
+		if e_expr and order and M.cmpPoint(from, to) > 1 then
+			local tmp = to
+			to = from
+			from = tmp
+			swapped = true
 		end
 
-		-- Trim trailing whitespace
-		local e_l = #lines
-		local e_c = range[4]
-		while e_l >= s_l do
-			local line = lines[e_l]
-			local len = #(line:match '%s*$')
-
-			if len >= #line then
-				e_l = e_l - 1
-				e_c = #lines[e_l] - 1
-			else
-				e_c = e_c - len
-				break
-			end
-		end
-
-		if s_l <= e_l then -- update only if there is text left
-			range[1] = range[1] + s_l - 1
-			if s_l == e_l and (range[4] ~= e_c or range[3] ~= range[1] + e_l - 1) then
-				e_c = e_c + range[2] -- shift the col by the truncated amount
-			end
-			range[2] = s_c
-			range[3] = range[1] + e_l - 1
-			range[4] = e_c
-		end
-
-		return range
+		---@cast from Range2|Range4
+		from[3] = to[1]
+		from[4] = to[2]
+		return from, buf, swapped
 	end
 
 	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
 	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
 
-	---@param v_modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
-	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
+	---@param modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
+	---@param end_fixer? string|boolean pattern to check for -1 offset necessity (default: true to adjust EOL)
 	---@return Range4? 0-indexed
 	---@return boolean? leading if cursor was at the beginning of the current selection
-	---@return manipulator.VisualMode? mode
-	function M.current_visual(v_modes, insert_fixer)
-		if type(v_modes) ~= 'table' then v_modes = { v = true, V = true, ['\022'] = true, s = true } end
+	---@return manipulator.VisualMode mode
+	function M.current_visual(modes, end_fixer)
+		if type(modes) ~= 'table' then modes = { v = true, V = true, ['\022'] = true, s = true } end
 		local mode = vim.fn.mode()
-		if not v_modes[mode] then return end
+		if not modes[mode] then return nil, nil, mode end
 
-		local from, to = vim.fn.getpos 'v', vim.fn.getpos '.' -- ignores linewise mode being whole lines
-		local leading = false
-		if from[2] > to[2] or (from[2] == to[2] and from[3] > to[3]) then -- [1]=bufnr
-			local tmp = to
-			to = from
-			from = tmp
-			leading = true
-		end
-		local range = {
-			from[2] - 1,
-			from[3] - 1,
-			to[2] - 1,
-			to[3] - 1,
-		}
+		local r, _, leading = M.get_range('v', '.', true) -- ignores linewise mode being whole lines
 
-		if insert_fixer ~= false then -- all visual modes can select the EOL
-			local tmp = M.fix_end(0, { range[3], range[4] }, mode == 's' and (insert_fixer or true) or false)
-			range[4] = tmp[2]
+		if end_fixer ~= false then -- all visual modes can select the EOL
+			-- TODO: allow arbitrary range edit fn
+			local tmp = M.fix_end(0, { r[3], r[4] }, mode == 's' and (end_fixer or true) or false)
+			r[4] = tmp[2]
 		end
 
-		return range, leading, mode
+		return r, leading, mode
 	end
 
-	---@param mouse? boolean if mouse or cursor position should be retrieved
+	-- TODO: merge with current_visual
+	---@param expr? pos_expr if mouse or cursor position should be retrieved
 	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
 	---@return manipulator.BufRange
-	function M.current_point(mouse, insert_fixer)
-		local ret
-		if mouse then
-			local m = vim.fn.getmousepos()
-			ret = {
-				buf = vim.api.nvim_win_get_buf(m.winid),
-				range = { m.line - 1, m.column - 1 },
-				mouse = true,
-			}
-		else
-			ret = { buf = 0, range = vim.api.nvim_win_get_cursor(0) }
-			ret.range[1] = ret.range[1] - 1
-			local mode = vim.fn.mode()
+	function M.get_point_bufrange(expr, insert_fixer)
+		local r, b = M.get_range(expr or '.')
+		local ret = { buf = b, range = r, mouse = expr == 'mouse' }
+		if ret.mouse then return ret end
+		local mode = vim.fn.mode()
 
-			if mode ~= 'n' and insert_fixer ~= false then -- ensure we're not selecting eol
-				M.fix_end(ret.buf, ret.range, (mode == 'i' or mode == 's') and (insert_fixer or true) or false)
-			end
-
-			if mode == 'i' then
-				ret.range[3] = ret.range[1]
-				ret.range[4] = ret.range[2] - 1
-				return ret
-			end
+		if mode ~= 'n' and insert_fixer ~= false then -- ensure we're not selecting eol
+			---@diagnostic disable-next-line: param-type-mismatch
+			M.fix_end(b, r, (mode == 'i' or mode == 's') and (insert_fixer or true) or false)
+			r[4] = r[2]
 		end
 
-		ret.range[3] = ret.range[1]
-		ret.range[4] = ret.range[2]
+		if mode == 'i' then r[4] = r[4] - 1 end -- make the active region being 0 chars long
+
 		return ret
 	end
 end

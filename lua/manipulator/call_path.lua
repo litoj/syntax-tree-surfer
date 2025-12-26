@@ -1,4 +1,4 @@
-local UTILS = require 'manipulator.utils'
+local U = require 'manipulator.utils'
 local Batch = require 'manipulator.batch'
 
 local mod_wrap = {}
@@ -33,15 +33,6 @@ do
 	setmetatable(mod_wrap, mod_wrap)
 end
 
----@alias manipulator.MotionOpt (nil|true|'print')|('ignore'|false) whether to inform the user when the motion falls short of the requested iteration count
-
----@private
----@class manipulator.CallPath.CallInfo
----@field fn? string|fun(x:any,...):any what method to call/apply on the object (else call the object directly)
----@field as_motion? manipulator.MotionOpt when applying `vim.v.count`-times what to do on nil
----@field args? unknown[] what arguments to run the method with
----@field anchor? string if the object is an anchor and not part an actual call
-
 ---@class manipulator.CallPath.Config
 ---@field immutable? boolean if path additions produce new objects instead of updates
 ---@field exec_on_call? # NOTE: makes return value useless when running async and `immutable=false`
@@ -51,8 +42,8 @@ end
 ---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
----@class manipulator.CallPath
----@field item any
+---@class manipulator.CallPath<O>: {item: O}
+---@operator call:manipulator.CallPath
 ---@field protected config manipulator.CallPath.Config
 ---@field protected path manipulator.CallPath.CallInfo[]
 ---@field protected idx integer at which index do we write the path
@@ -62,24 +53,24 @@ end
 ---@field dot_fn function shortcut for `self:as_op({dot_repeat_only=true})`
 local CallPath = {}
 
----@overload fun(...):manipulator.TSRegion
----@class manipulator.CallPath.TSRegion: manipulator.CallPath,manipulator.TSRegion,{[string]:manipulator.CallPath.TSRegion|fun(...):manipulator.CallPath.TSRegion}
+---@overload fun(...):manipulator.TS
+---@class manipulator.CallPath.TS: manipulator.CallPath,manipulator.TS,{[string]:manipulator.CallPath.TS|fun(...):manipulator.CallPath.TS}
 ---@overload fun(...):manipulator.Region
 ---@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region,{[string]:manipulator.CallPath.Region|fun(...):manipulator.CallPath.Region}
 
 ---Building syntax:
 --- - `mcp.<key>:xyz(opts):exec()` -> `require'manipulator.<key>'.current():xyz(opts)`
---- - `mcp.tsregion({v_partial=0}).select.fn()` -> `require'manipulator.tsregion'.current({v_partial=0}):select()`
+--- - `mcp.ts({v_partial=0}).select.fn()` -> `require'manipulator.ts'.current({v_partial=0}):select()`
 --- - segments are immutable - every path is reusable and each added field/args produce a new copy
 ---Calling the build path:
 --- - for keymappings pass in the `.fn` field,
 --- - for direct evaluation call `:exec()`/`.fn()` manually
 ---@overload fun(o?:manipulator.CallPath.Config):manipulator.CallPath for generic executor builds
 ---@class manipulator.CallPath.module: manipulator.CallPath
----@field tsregion manipulator.CallPath.TSRegion|fun(opts:manipulator.TSRegion.module.current.Opts):manipulator.CallPath.TSRegion
+---@field ts manipulator.CallPath.TS|fun(opts:manipulator.TS.module.current.Opts):manipulator.CallPath.TS
 ---@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
 ---@field class manipulator.CallPath
-local M = UTILS.static_wrap_for_oop(CallPath, {
+local M = U.static_wrap_for_oop(CallPath, {
 	__index = function(_, key) return CallPath:new({ item = mod_wrap })[key] end,
 	__call = function(self, args) return self:new(args) end,
 })
@@ -103,7 +94,7 @@ M.config = M.default_config
 
 ---@param config manipulator.CallPath.Config
 function M.setup(config)
-	M.config = UTILS.expand_config({ active = M.config }, M.default_config, config, {})
+	M.config = U.expand_config({ active = M.config }, M.default_config, config, {})
 	return M
 end
 
@@ -114,7 +105,7 @@ end
 ---@return O # opts expanded for the given method
 function CallPath:action_opts(opts, action)
 	return self.config[action]
-			and (opts and UTILS.tbl_inner_extend('keep', opts, self.config[action]) or self.config[action])
+			and (opts and U.tbl_inner_extend('keep', opts, self.config[action]) or self.config[action])
 		or opts
 		or {}
 end
@@ -129,13 +120,20 @@ function CallPath:new(o)
 
 	-- copies the path contents, not the path obj itself -> modification-independent
 	-- relies on the CallInfo to be immutable
-	o = UTILS.tbl_inner_extend('keep', o, self.path and self or { config = M.config, idx = 0 }, 1)
+	o = U.tbl_inner_extend('keep', o, self.path and self or { config = M.config, idx = 0 }, 1)
 
 	return setmetatable(o, CallPath)
 end
 
 ---@private
 function CallPath:__tostring() return vim.inspect(self.path) end
+
+---@private
+---@class manipulator.CallPath.CallInfo
+---@field fn? string|fun(x:any,...):any? what method to call/apply on the object (else call the object directly)
+---@field as_motion? manipulator.MotionOpt when applying `vim.v.count`-times what to do on nil
+---@field args? unknown[] what arguments to run the method with
+---@field anchor? string if the object is an anchor and not part an actual call
 
 ---@private
 ---@param elem manipulator.CallPath.CallInfo
@@ -147,7 +145,7 @@ end
 local PathAnchor = { __index = function() return 1 end }
 
 ---@private
----@param key string|fun(x:any,...):any
+---@param key string|fun(x:any,...):any?
 function CallPath:__index(key)
 	if CallPath[key] then return CallPath[key] end
 	if key == 'fn' then -- allow delayed method call via static reference (inject self)
@@ -194,7 +192,7 @@ function CallPath:__call(a1, ...)
 	local call = self.path[self.idx]
 
 	if call and not call.args then -- count-enabled call
-		self.path[self.idx] = UTILS.tbl_inner_extend('keep', { args = args }, call)
+		self.path[self.idx] = U.tbl_inner_extend('keep', { args = args }, call)
 		-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
 		if call.fn == 'pick' and args[1] and args[1].callback then self.needs_coroutine = nil end
 	else -- call of the wrapped object directly
@@ -212,6 +210,8 @@ function CallPath:__call(a1, ...)
 	return self
 end
 
+---@alias manipulator.MotionOpt (nil|true|'print')|('ignore'|false) whether to inform the user when the motion falls short of the requested iteration count
+
 --- Allow the {target} to be repeated `vim.v.count1`-times.
 --- NOTE: anchores are ignored -> if it is followed by an anchor and
 --- then an index that index will get marked as a motion.
@@ -227,7 +227,7 @@ end
 function CallPath:with_count(target, on_fail)
 	if self.config.immutable then self = self:new() end
 
-	local as_motion = UTILS.get_or(on_fail, 'print') or 'ignore'
+	local as_motion = U.get_or(on_fail, 'print') or 'ignore'
 	if target == 'on_next' then
 		self.next_as_motion = as_motion
 	elseif target then
@@ -269,7 +269,7 @@ function CallPath:as_op(opts)
 		end
 		vim.go.operatorfunc = [[v:lua.require'manipulator.call_path'.opfunc]]
 
-		if mode == 'i' then keys = vim.api.nvim_replace_termcodes('<C-o>', true, true, true) .. keys end
+		if mode == 'i' then keys = '\015' .. keys end -- <C-o>
 		if opts.return_expr then return keys end
 		vim.api.nvim_feedkeys(keys, 'n', false)
 	end
@@ -310,7 +310,8 @@ function CallPath:_exec(opts)
 	end
 
 	local item = self.item
-	for _, call in ipairs(self.path) do
+	for i, call in ipairs(self.path) do
+		if item == nil then error('CallPath step ' .. i - 1 .. ' returned nil: ' .. tostring(self)) end
 		if type(call.fn) ~= 'string' and type(call.fn) ~= 'function' then -- ## no object access
 			if rawget(call, 'args') then -- directly call the object
 				if not opts.allow_direct_calls then

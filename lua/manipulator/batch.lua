@@ -1,6 +1,6 @@
 ---@diagnostic disable: invisible
-local UTILS = require 'manipulator.utils'
-local RANGE_UTILS = require 'manipulator.range_utils'
+local U = require 'manipulator.utils'
+local RANGE_U = require 'manipulator.range_utils'
 
 ---@class manipulator.Batch
 ---@field items manipulator.Region[]
@@ -20,7 +20,7 @@ Batch.opt_inheritance = { pick = true }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
-local M = UTILS.static_wrap_for_oop(Batch, {})
+local M = U.static_wrap_for_oop(Batch, {})
 
 ---@class manipulator.Batch.module.Config: manipulator.Batch.Config
 ---@field recursive_limit? integer how many iterations is from_recursive() allowed by default
@@ -47,13 +47,14 @@ M.default_config = {
 M.config = M.default_config
 ---@param config manipulator.Batch.module.Config
 function M.setup(config)
-	M.config = UTILS.module_setup({ active = M.config }, M.default_config, config, Batch.opt_inheritance)
+	M.config = U.module_setup({ active = M.config }, M.default_config, config, Batch.opt_inheritance)
 	return M
 end
 
 ---@private
 ---@param opts manipulator.Batch.Opts
 function Batch:fix_items(opts)
+	opts = opts or self.config
 	if opts.on_nil_item == 'include' then return end
 	local Nil = self.Nil
 	if opts.on_nil_item == 'drop_all' then
@@ -73,13 +74,13 @@ function Batch:fix_items(opts)
 	end
 end
 
----@param opts? manipulator.Batch.Opts
 ---@param items manipulator.Region[] contents
----@param Nil manipulator.Region|false what to return, if no items are valid/chosen
+---@param Nil? manipulator.Region|false what to return, if no items are valid/chosen
+---@param config? manipulator.Batch.Opts
 ---@return manipulator.Batch
-function Batch:new(opts, items, Nil)
-	self = setmetatable({ items = items, Nil = Nil, config = self.config or M.config }, Batch)
-	self:fix_items(opts or M.config)
+function Batch:new(items, Nil, config)
+	self = setmetatable({ items = items, Nil = U.get_or(Nil, self.Nil), config = self.config or M.config }, Batch)
+	self:fix_items(config)
 	return self
 end
 
@@ -89,9 +90,9 @@ function Batch:__tostring() return '[' .. table.concat(self.items, ', ') .. ']' 
 ---@param inplace boolean should we replace current config or make new copy (default: false)
 function Batch:with(config, inplace)
 	---@diagnostic disable-next-line: inject-field
-	config = UTILS.expand_config(self.config.presets, self.config, config, Batch.opt_inheritance)
+	config = U.expand_config(self.config.presets, self.config, config, Batch.opt_inheritance)
 
-	local ret = inplace and self or self:new(config, self.items, self.Nil)
+	local ret = inplace and self or self:new(self.items, self.Nil, config)
 	ret.config = config
 	return ret
 end
@@ -114,13 +115,14 @@ function M.action_to_fn(action)
 			for _, a in ipairs(action) do
 				x = x[a](x)
 			end
+
 			return x
 		end
 end
 
 ---@param action manipulator.Batch.Action
 ---@return manipulator.Batch self
-function Batch:apply(action)
+function Batch:for_each(action)
 	action = M.action_to_fn(action)
 	for _, item in ipairs(self.items) do
 		action(item)
@@ -128,22 +130,35 @@ function Batch:apply(action)
 
 	return self
 end
-
---- Presumes the items are Region items that can be added to the quickfix window
----@param mode? 'a'|'w' `vim.fn.setqflist` action to perform - append or overwrite (default: 'w')
-function Batch:to_qf(mode)
-	local list = {}
-	for _, item in ipairs(self.items) do
-		list[#list + 1] = item:as_qf_item()
+---Reduce a list to a single value.
+---@generic T,U
+---@param init U
+---@param fn fun(acc:U,value:T):U
+---@return U
+function Batch:reduce(init, fn)
+	for _, v in ipairs(self.items) do
+		init = fn(init, v)
 	end
-	vim.fn.setqflist(list, mode or 'w')
 
-	return self
+	return init
+end
+
+--- Reverse items inplace
+---@return manipulator.Batch self
+function Batch:reverse()
+	local max = #self.items + 1
+
+	local items = {}
+	for i, v in ipairs(self.items) do
+		items[max - i] = v
+	end
+
+	return self:new(items)
 end
 
 ---@param ... manipulator.Batch.Action item method sequences to apply
 --- - each sequence applied to the original
---- - multi-return actions allowed
+--- - multi-return actions spliced
 ---@return manipulator.Batch
 function Batch:map(...)
 	local items = {}
@@ -155,7 +170,8 @@ function Batch:map(...)
 			end
 		end
 	end
-	return self:new(M.config, items, #items > 0 and items[1].Nil or self.Nil)
+
+	return self:new(items, #items > 0 and items[1].Nil or self.Nil)
 end
 
 ---@param filter fun(item):boolean say which nodes should be carried over
@@ -166,7 +182,22 @@ function Batch:filter(filter)
 		if filter(item) then items[#items + 1] = item end
 	end
 
-	return self:new(M.config, items, self.Nil)
+	return self:new(items)
+end
+
+---@return IterMod
+function Batch:to_iter() return vim.iter(self.items) end
+
+--- Presumes the items are Region items that can be added to the quickfix window
+---@param mode? 'a'|'w' `vim.fn.setqflist` action to perform - append or overwrite (default: 'w')
+function Batch:to_qf(mode)
+	local list = {}
+	for _, item in ipairs(self.items) do
+		list[#list + 1] = item:as_qf_item()
+	end
+	vim.fn.setqflist(list, mode or 'w')
+
+	return self
 end
 
 ---@class manipulator.Batch.pick.Opts
@@ -185,12 +216,12 @@ end
 ---@param opts? manipulator.Batch.pick.Opts can include all `fzf-lua.config.Base` opts
 ---@return manipulator.Region|manipulator.Batch?
 function Batch:pick(opts)
-	opts = UTILS.get_opts_for_action(self.config, opts, 'pick', Batch.opt_inheritance)
+	opts = U.get_opts_for_action(self.config, opts, 'pick', Batch.opt_inheritance)
 
 	local co
 	local callback = opts.callback
 	local pick
-	local function resolve(result) callback(opts.multi and self:new(opts, result, self.Nil) or result[1] or self.Nil) end
+	local function resolve(result) callback(opts.multi and self:new(result, self.Nil, opts) or result[1] or self.Nil) end
 	if #self.items <= 1 and (opts.autoselect_single or #self.items == 0) then
 		if type(callback) ~= 'function' then callback = function(x) pick = x end end
 		resolve { self.Nil }
@@ -241,7 +272,7 @@ function Batch:pick(opts)
 		local bufs = { [#self.items] = 1 } ---@cast bufs {}
 		for i, item in ipairs(self.items) do
 			local display = opts.format_item(item)
-			local buf, range = RANGE_UTILS.decompose(item, false)
+			local buf, range = RANGE_U.decompose(item, false)
 			if not bufs[-buf] then bufs[-buf] = { bufnr = buf, path = vim.api.nvim_buf_get_name(buf) } end
 			bufs[i] = buf or 0
 			if range and range[2] then
@@ -305,7 +336,7 @@ end
 ---@param ... manipulator.Batch.Action item method sequences to apply and collect the result of
 ---@return manipulator.Batch
 function M.from(src, ...)
-	if not src or src == src.Nil then return Batch:new(M.config, {}, src and src.Nil or false) end
+	if not src or src == src.Nil then return Batch:new({}, src and src.Nil or false) end
 	local actions = { ... }
 	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
 	local acc = {}
@@ -316,7 +347,7 @@ function M.from(src, ...)
 		acc[#acc + 1] = action(src)
 	end
 
-	return Batch:new(M.config, acc, Nil)
+	return Batch:new(acc, Nil)
 end
 
 ---@param src manipulator.Region|{Nil:table|false}
@@ -324,7 +355,7 @@ end
 ---@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
 ---@return manipulator.Batch
 function M.from_recursive(src, limit, ...)
-	if not src or src == src.Nil then return Batch:new(M.config, {}, src and src.Nil or false) end
+	if not src or src == src.Nil then return Batch:new({}, src and src.Nil or false) end
 	limit = limit == -1 and M.config.recursive_limit or (limit == 'vimcount' and vim.v.count1 or limit)
 	local actions = { ... }
 
@@ -343,7 +374,7 @@ function M.from_recursive(src, limit, ...)
 		end
 	end
 
-	return Batch:new(M.config, acc, Nil)
+	return Batch:new(acc, Nil)
 end
 
 return M

@@ -4,14 +4,14 @@
 ---@field batch manipulator.Batch.module
 ---@field call_path manipulator.CallPath.module
 ---@field region manipulator.Region.module
----@field tsregion manipulator.TSRegion.module
+---@field ts manipulator.TS.module
 local M = {}
 
 ---@class manipulator.Config
 ---@field batch? manipulator.Batch.module.Config
 ---@field call_path? manipulator.CallPath.Config
 ---@field region? manipulator.Region.module.Config
----@field tsregion? manipulator.TSRegion.module.Config
+---@field ts? manipulator.TS.module.Config
 ---@field debug? false|vim.log.levels log level of debug messages of expanded options etc.
 
 ---@param config? manipulator.Config
@@ -19,7 +19,7 @@ local M = {}
 function M.setup(config)
 	config = config or {}
 
-	for _, mod in ipairs { 'batch', 'call_path', 'region', 'tsregion' } do
+	for _, mod in ipairs { 'batch', 'call_path', 'region', 'ts' } do
 		M[mod] = require('manipulator.' .. mod).setup(config[mod])
 
 		if config.debug ~= nil then M[mod].debug = config.debug end

@@ -2,9 +2,9 @@
 ---@class manipulator.ts_utils
 local M = {}
 
-local RANGE_UTILS = require 'manipulator.range_utils'
+local RANGE_U = require 'manipulator.range_utils'
 
----@param opts manipulator.TSRegion.Opts
+---@param opts manipulator.TS.Opts
 ---@param node TSNode
 ---@param return_node TSNode? is the result when at a new range but {node} has bad type
 ---@param new TSNode?
@@ -16,7 +16,7 @@ function M.valid_parented_node(opts, node, return_node, new, prefer_new)
 	if not prefer_new and opts.types[node:type()] then return_node = node end
 
 	-- have we found a node of a different size?
-	if new and RANGE_UTILS.rangeContains({ node:range() }, { new:range() }) ~= 0 then
+	if new and RANGE_U.rangeContains({ node:range() }, { new:range() }) ~= 0 then
 		if prefer_new then
 			if opts.types[new:type()] then return true, new end
 		else
@@ -28,7 +28,7 @@ function M.valid_parented_node(opts, node, return_node, new, prefer_new)
 	return false, return_node
 end
 
----@type fun(opts:manipulator.TSRegion.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree):
+---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree):
 --- (TSNode?,vim.treesitter.LanguageTree?)
 function M.get_direct_parent(opts, node, ltree)
 	local parent = node:parent()
@@ -43,7 +43,7 @@ end
 
 --- Get the furthest ancestor with the same range as current node,
 --- or lowest parent with larger range if {return_parent}.
----@type fun(opts:manipulator.TSRegion.Opts, node:TSNode?, ltree:vim.treesitter.LanguageTree,
+---@type fun(opts:manipulator.TS.Opts, node:TSNode?, ltree:vim.treesitter.LanguageTree,
 ---return_parent:boolean?): (TSNode?,vim.treesitter.LanguageTree?)
 function M.top_identity(opts, node, ltree, return_parent)
 	if not node then return end
@@ -79,7 +79,7 @@ function M.top_identity(opts, node, ltree, return_parent)
 	return return_node, return_parent and ltree or otree
 end
 
----@type fun(opts:manipulator.TSRegion.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
+---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
 ---idx:0|-1): (TSNode?,vim.treesitter.LanguageTree?)
 function M.get_direct_child(opts, node, ltree, idx)
 	local cnt = node:named_child_count()
@@ -125,7 +125,7 @@ local function find_valid_child(opts, node, ltree, idx, orig_parent)
 	end
 end
 
----@type fun(opts:manipulator.TSRegion.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
+---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
 ---idx?:integer|Range4): (TSNode?,vim.treesitter.LanguageTree?)
 function M.get_child(opts, node, ltree, idx)
 	if not idx then idx = 0 end
@@ -140,7 +140,7 @@ function M.get_child(opts, node, ltree, idx)
 			node = child
 			child, ltree = M.get_direct_child(opts, child, ltree, idx)
 			if child then
-				if RANGE_UTILS.rangeContains({ node:range() }, { child:range() }) ~= 0 then break end
+				if RANGE_U.rangeContains({ node:range() }, { child:range() }) ~= 0 then break end
 				cnt = child:named_child_count()
 			else
 				break
@@ -161,7 +161,7 @@ function M.get_child(opts, node, ltree, idx)
 	return find_valid_child(opts, child, ltree, idx, node)
 end
 
----@class manipulator.TSRegion.GraphOpts: manipulator.TSRegion.Opts
+---@class manipulator.TS.GraphOpts: manipulator.TS.Opts
 ---@field allow_child? boolean if children of the current node can be returned (NOTE: forced `false` for prev)
 ---@field max_descend? integer|false how many lower levels to scan for a result (not necessarily direct child)
 ---@field max_ascend? integer|false the furthest parent to consider returning
@@ -170,17 +170,17 @@ end
 ---@field compare_end? boolean should we look in direction by end of node or start
 -- ---@field match string scheme query to match TODO
 
----@type fun(direction:'prev'|'next',opts:manipulator.TSRegion.GraphOpts, node:TSNode,
+---@type fun(direction:'prev'|'next',opts:manipulator.TS.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
 function M.search_in_graph(direction, opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
 	local max_depth = opts.max_descend or math.huge
 	local min_shared = -(opts.max_link_dst or math.huge)
-	local min_depth = -(opts.max_ascend or -min_shared)
+	local min_depth = -(opts.max_ascend or math.huge)
 	local cmp_fn = opts.compare_end and node.end_ or node.start
 
 	local function start_point_to_byte(sp, fallback)
-		if sp == 'cursor' then sp = RANGE_UTILS.current_point().range end
+		if sp == 'cursor' then sp = RANGE_U.get_point '.' end
 		return sp and (vim.fn.line2byte(sp[1] + 1) - 1 + sp[2]) or fallback
 	end
 
@@ -189,7 +189,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 	local tmp, tmp_tree = nil, ltree
 	local ok_range
 	local continue = function()
-		return node and not (types[node:type()] and ok_range(node) and not RANGE_UTILS.equal({ node:range() }, o_range))
+		return node and not (types[node:type()] and ok_range(node) and not RANGE_U.equal({ node:range() }, o_range))
 	end
 
 	if direction == 'prev' then
@@ -197,7 +197,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
 		while continue() do
-			-- must begin with sibling to prevent looping par-child in repeated uses
+			-- must begin with sibling to prevent looping parent-child in repeated uses
 			tmp = node:prev_named_sibling()
 
 			if tmp then
@@ -233,7 +233,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 			if tmp then
 				ltree = tmp_tree
 			else
-				while node and not tmp and depth > min_shared do
+				while node and not tmp and depth >= min_shared do
 					tmp = node:next_named_sibling()
 					if not tmp then
 						depth = depth - 1

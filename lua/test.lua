@@ -1,6 +1,6 @@
-local mts = require 'manipulator.tsregion'
+local mts = require 'manipulator.ts'
 local mcp = require 'manipulator.call_path'
-local get_node = mcp.tsregion.current.fn
+local get_node = mcp.ts.current.fn
 
 local methods = {
 	top = function() return vim.treesitter.get_node { bufnr = 0 } end,
@@ -149,8 +149,8 @@ local function benchmark_node_retrieval()
 	-- Run benchmarks
 	_G.bench {
 		methods = methods,
-		-- iterations = iterations,
-		duration = 1,
+		iterations = iterations,
+		-- duration = 1,
 		args = function(i)
 			local range = ranges[i % #ranges + 1]
 			vim.api.nvim_win_set_cursor(0, { range[1], range[2] - 1 })
@@ -255,9 +255,7 @@ local function bench_table_update()
 			end,
 		},
 		duration = 5,
-		args = function(i)
-			return { true, ranges[i % iterations + 1], ranges[(i + iterations / 2) % iterations + 1] }
-		end,
+		args = function(i) return { true, ranges[i % iterations + 1], ranges[(i + iterations / 2) % iterations + 1] } end,
 	}
 end
 map('n', '<leader>br', bench_table_update)
@@ -284,15 +282,13 @@ local function bench_filters()
 	}
 
 	local sts = require 'syntax-tree-surfer'
-	local mts = require 'manipulator.tsregion'
+	local mts = require 'manipulator.ts'
 
 	_G.bench {
 		duration = 1,
 		methods = {
 			sts = function(types) sts.filtered_jump(types, true, {}) end,
-			mts = function(types)
-				mts.current():next({ types = types, allow_child = true }):jump()
-			end,
+			mts = function(types) mts.current():next({ types = types, allow_child = true }):jump() end,
 		},
 		args = function(i)
 			local range = ranges[i % #ranges + 1]
@@ -302,6 +298,3 @@ local function bench_filters()
 	}
 end
 map('n', '<leader>bf', bench_filters)
-
-local tsu = require'manipulator.ts_utils'
-local node = mts.current():collect({'next_in_graph'}):pick({ picker = 'fzf-lua',callback=true})
