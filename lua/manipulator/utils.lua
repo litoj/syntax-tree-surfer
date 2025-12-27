@@ -86,7 +86,7 @@ end
 
 ---@generic V,D
 ---@param val `V`
----@param default `D`
+---@param default D
 ---@return V|D
 function M.get_or(val, default)
 	if val == nil then return default end
@@ -260,6 +260,8 @@ do -- ### config inheritance/extension helpers
 			local val = act_opts[key]
 			if is_action then -- action cfg doesn't get saved and reused -> other act opts useless
 				-- NOTE: disabled action ref cleanup until a better solution for rangemod full user opts access
+				-- even when enabled there will be ptr recursion
+				-- - current() defaults inherit cfg, actions keys with opt_inh.=false -> set inh to ''?
 				-- if not_cfg then act_opts[key] = nil end
 			elseif type(val) == 'table' and rawget(val, 'inherit') then -- avoid enablers
 				if val.inherit == true then -- NOTE: presets in keys get resolved by expand_config later

@@ -42,8 +42,8 @@ end
 ---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
----@class manipulator.CallPath<O>: {item: O}
----@operator call:manipulator.CallPath
+---@class manipulator.CallPath<O>: {item: O, [any]:manipulator.CallPath<O>|O}
+---@operator call(...):manipulator.CallPath
 ---@field protected config manipulator.CallPath.Config
 ---@field protected path manipulator.CallPath.CallInfo[]
 ---@field protected idx integer at which index do we write the path
@@ -127,6 +127,10 @@ end
 
 ---@private
 function CallPath:__tostring() return vim.inspect(self.path) end
+U.with_mod('reform', function()
+	local t = require 'reform.tbl_extras'
+	function CallPath:__tostring() return vim.inspect(t.tbl_cut_depth(self.path, { depth = 3, cuts = '…' })) end
+end)
 
 ---@private
 ---@class manipulator.CallPath.CallInfo
@@ -311,8 +315,9 @@ function CallPath:_exec(opts)
 
 	local item = self.item
 	for i, call in ipairs(self.path) do
-		if item == nil then error('CallPath step ' .. i - 1 .. ' returned nil: ' .. tostring(self)) end
-		if type(call.fn) ~= 'string' and type(call.fn) ~= 'function' then -- ## no object access
+		if item == nil and type(call.anchor) ~= 'string' then -- no item and not at an anchor
+			error('CallPath step ' .. i - 1 .. ' returned nil: ' .. tostring(self))
+		elseif type(call.fn) ~= 'string' and type(call.fn) ~= 'function' then -- ## no object access
 			if rawget(call, 'args') then -- directly call the object
 				if not opts.allow_direct_calls then
 					error('CallPath direct calls are not allowed: ' .. tostring(self))

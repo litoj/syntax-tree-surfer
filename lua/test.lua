@@ -1,56 +1,18 @@
-local mts = require 'manipulator.ts'
-local mcp = require 'manipulator.call_path'
-local get_node = mcp.ts.current.fn
+require 'bench'
+local m = require 'manipulator'
+local mts, mcp = m.ts, m.call_path
 
-local methods = {
-	top = function() return vim.treesitter.get_node { bufnr = 0 } end,
-	inj_node = function() return vim.treesitter.get_node { bufnr = 0, ignore_injections = false } end,
-	--[[ inj_range = function() -- faster, but we have no awareness of the language tree
-		return vim.treesitter.get_parser(0):named_node_for_range(range, { ignore_injections = false })
-	end,
-	ltree = function()
-		return vim.treesitter.get_parser(0):language_for_range(range):named_node_for_range(range)
-	end, ]]
-	mts = function() return mts.current().node end,
-	mts_ni = function() return mts.current({ inherit = false, types = {}, nil_wrap = true }).node end,
+map('', ' ll', mcp.ts:collect(mcp:new():parent { types = { ['*'] = true } }):pick().fn)
 
-	cp = get_node,
+local getters = {
+	ltree = function(range) return vim.treesitter.get_parser(0):language_for_range(range):named_node_for_range(range) end,
+	mts = function(range) return mts.get({ range = range }).node end,
+	mts_current = function() return mts.current({ on_partial = 'larger' }).node end, -- measures overhead of getting cursor
+	mts_current_partial = function() return mts.current({ on_partial = 'cursor' }).node end,
+	mts_no_inj = function(range) return mts.get({ range = range, langs = false, types = { ['*'] = true } }).node end,
 }
 
--- Test function that uses visual selection or cursor position
-local function show_node_path()
-	-- test difference between sts parents
-	local ret = mts.current { deep = true }
-	if not ret or not ret.node then return end
-	local node = ret.node
-
-	-- collect all node and parent data
-	local path = {}
-	local i = 1
-	while node do
-		path[string.format('_%02d', i)] = {
-			{ node:range() },
-			node:type(),
-			node:sexpr(),
-		}
-		i = i + 1
-		node = node:named_child(0)
-	end
-	node = ret.node
-	while node do
-		path[string.format('_%02d', i)] = {
-			{ node:range() },
-			node:type(),
-		}
-		i = i + 1
-		node = node:parent()
-	end
-	print(path, 5)
-end
-map('', ' ll', show_node_path)
-
 local lines
-local function update_lines(bufnr) lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false) end
 
 -- Generate random ranges, end exclusive
 local function gen_rnd_point(range)
@@ -59,214 +21,29 @@ local function gen_rnd_point(range)
 	return { line, col }
 end
 
-local function gen_rnd_range(range)
+local function gen_rnd_range0(range)
 	local from = gen_rnd_point(range)
 	local to = gen_rnd_point(range)
-	if from[1] > to[1] or (from[1] == to[1] and from[2] > to[2]) then
-		local tmp = from
-		from = to
-		to = tmp
-	end
-	return { from[1], from[2], to[1], to[2] }
+	-- make single-point
+	if from[1] > to[1] or (from[1] == to[1] and from[2] > to[2]) then from = to end
+	return { from[1] - 1, from[2] - 1, to[1] - 1, to[2] - 1 }
 end
 
-local function gen_rnd_range0(bound1)
-	local range = gen_rnd_range(bound1)
-	return { range[1] - 1, range[2] - 1, range[3] - 1, range[4] - 1 }
-end
+local function gen_real_ranges(size)
+	lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
 
-local function gen_real_ranges(iterations)
-	local ranges = { [iterations] = { 1, 1, 1, 1 } }
-	update_lines(0)
-	for i = 1, iterations do
-		ranges[i] = gen_rnd_range0 {
-			1,
-			1,
-			#lines, --[[ iterations ]]
-		}
+	local ranges = { [size] = { 1, 1, #lines } }
+	for i = 1, size do
+		ranges[i] = gen_rnd_range0(ranges[size])
 	end
 	return ranges
 end
 
--- Performance benchmarking for node retrieval methods
-local function benchmark_node_retrieval()
-	local bufnr = 0
-	local iterations = 100000
-
-	local parser = vim.treesitter.get_parser(bufnr)
-	if not parser then
-		print 'No parser available'
-		return
-	end
-
-	-- Collect injected language regions
-	local injected_regions = {}
-	local seen_ltrees = {}
-	-- local seen_tstrees = {}
-	parser:for_each_tree(function(tstree, ltree)
-		-- Deduplicate: for_each_tree may iterate over the same ltree multiple times
-		local r = ltree:included_regions()
-		seen_ltrees[r] = { (seen_ltrees[r] or { 0 })[1] + 1, ltree:lang() }
-		-- seen_tstrees[tstree] = { (seen_tstrees[r] or { 0 })[1] + 1, ltree:lang() }
-		if seen_ltrees[r][1] > 1 then return end
-
-		local lang = ltree:lang()
-		local regions = ltree:included_regions()
-
-		-- Skip if it's the main language or already processed
-		if #regions[1] > 0 then
-			for _, region in ipairs(regions) do
-				-- region is {start_row, start_col, end_row, end_col}
-				injected_regions[#injected_regions + 1] = {
-					lang = lang,
-					region = { region[1][1] + 1, region[1][2] + 1, region[1][4] + 1, region[1][5] + 1 },
-					ltree = ltree,
-				}
-			end
-		end
-	end)
-
-	print(string.format('Found %d injected regions', #injected_regions))
-
-	-- ### Range generation
-	-- Get buffer dimensions
-	update_lines(bufnr)
-
-	-- Generate ranges within injected regions
-	local function gen_inj_range()
-		local inj = injected_regions[math.random(1, #injected_regions)]
-		if not inj then return end
-		local region = inj.region
-		return gen_rnd_range(region)
-	end
-
-	-- Generate test ranges
-	local ranges = { [iterations] = { 1, 1, 1, 1 } }
-	for i = 1, iterations do
-		ranges[i] = i % 2 == 1 and gen_inj_range() or gen_rnd_range { 1, 1, #lines }
-	end
-
-	-- Run benchmarks
-	_G.bench {
-		methods = methods,
-		iterations = iterations,
-		-- duration = 1,
-		args = function(i)
-			local range = ranges[i % #ranges + 1]
-			vim.api.nvim_win_set_cursor(0, { range[1], range[2] - 1 })
-			return {}
-		end,
-	}
-end
-
-map('n', '<leader>bp', benchmark_node_retrieval)
-
--- Generalized function to collect all nodes in the tree that satisfy a given filter
--- @param filter: function(node) -> boolean - determines which nodes to collect
--- @return: array of nodes that satisfy the filter
-local function collect_filtered_nodes(filter)
-	local parser = vim.treesitter.get_parser(0)
-	if not parser then return {} end
-
-	local collected = {}
-	parser:for_each_tree(function(tstree, ltree)
-		local root = tstree:root()
-
-		-- Traverse tree and collect nodes matching the filter
-		local function traverse(node)
-			if not node then return end
-
-			if filter(node) then collected[#collected + 1] = node end
-
-			-- Recursively traverse all named children
-			local child_count = node:named_child_count()
-			for i = 0, child_count - 1 do
-				traverse(node:named_child(i))
-			end
-		end
-
-		traverse(root)
-	end)
-
-	return collected
-end
-
-local function bench_table_update()
-	local iterations = 1000
-	local ranges = gen_real_ranges(iterations)
-	local function sub(range1, range2)
-		for i, v in ipairs(range1) do
-			range1[i] = math.min(v, range2[i])
-		end
-		return range1
-	end
-
-	_G.bench {
-		methods = {
-			--[[ newtbl = function(add, range1, range2)
-				if add then
-					range1 = {
-						math.min(range1[1], range2[1]),
-						math.min(range1[2], range2[2]),
-						math.max(range1[3], range2[3]),
-						math.max(range1[4], range2[4]),
-					}
-				end
-				return range1
-			end,
-			replace = function(add, range1, range2)
-				if add then
-					range1[1] = math.min(range1[1], range2[1])
-					range1[2] = math.min(range1[2], range2[2])
-					range1[3] = math.max(range1[3], range2[3])
-					range1[4] = math.max(range1[4], range2[4])
-				end
-				return range1
-			end, ]]
-			cycle_for = function(add, range1, range2)
-				if add then
-					for i = 1, #range1 do
-						range1[i] = math.min(range1[i], range2[i])
-					end
-				end
-				return range1
-			end,
-			cycle_pairs = function(add, range1, range2)
-				if add then
-					for i, v in ipairs(range1) do
-						range1[i] = math.min(v, range2[i])
-					end
-				end
-				return range1
-			end,
-			cycle_while = function(add, range1, range2)
-				if add then
-					local i = 1
-					while range1[i] do
-						range1[i] = math.min(range1[i], range2[i])
-						i = i + 1
-					end
-				end
-				return range1
-			end,
-			cycle_deffered = function(add, range1, range2)
-				if add then range1 = sub(range1, range2) end
-				return range1
-			end,
-		},
-		duration = 5,
-		args = function(i) return { true, ranges[i % iterations + 1], ranges[(i + iterations / 2) % iterations + 1] } end,
-	}
-end
-map('n', '<leader>br', bench_table_update)
-
 local function bench_filters()
-	local iterations = 10000
-	local ranges = gen_real_ranges(iterations)
 	local args = {
 		{ 'function_call', 'call_expression', 'return_statement' },
 
-		--[[ {
+		{
 			'function',
 			'arrow_function',
 			'function_definition',
@@ -278,23 +55,32 @@ local function bench_filters()
 			'variable_declaration',
 			'parameter_declaration',
 			'field',
-		}, ]]
+		},
 	}
 
 	local sts = require 'syntax-tree-surfer'
-	local mts = require 'manipulator.ts'
+	local cp = mcp.ts.next['&1']:jump()['&$']['*1']
 
+	local filters = {
+		sts = function(_, types) sts.filtered_jump(types, true, {}) end,
+		mts = function(_, types) mts.current():next({ types = types, allow_child = true }):jump() end,
+		cp = function(_, types) cp({ types = types, allow_child = true }):exec() end,
+	}
+
+	local pos = m.region.current()
+	local size = 10000
+	local ranges = gen_real_ranges(size)
+	ranges = { { #lines - 1, 1, #lines - 1, vim.v.maxcol } }
 	_G.bench {
-		duration = 1,
-		methods = {
-			sts = function(types) sts.filtered_jump(types, true, {}) end,
-			mts = function(types) mts.current():next({ types = types, allow_child = true }):jump() end,
-		},
+		duration = 2, -- iterations = size,
+		methods = getters,
 		args = function(i)
 			local range = ranges[i % #ranges + 1]
-			vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
-			return { vim.tbl_extend('keep', {}, args[i % #args + 1]) }
+			pos:new(range):select()
+			return { range, vim.tbl_extend('keep', {}, args[i % #args + 1]) }
 		end,
 	}
+	vim.api.nvim_input '<Esc>'
+	pos:jump()
 end
 map('n', '<leader>bf', bench_filters)

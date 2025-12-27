@@ -53,34 +53,21 @@ function M.setup(config) -- TODO: put config into Region -||-TSRegion to simplif
 end
 
 ---@protected
----@generic O: manipulator.Region.Config
----@param opts? `O`|string user options to get expanded - updated **inplace**
+---@generic O: table
+---@param opts? O|string user options to get expanded - updated **inplace**
 ---@param action? string
 ---@return O # opts expanded for the given method
 function Region:action_opts(opts, action)
 	return U.get_opts_for_action(self.config or M.config, opts, action, self.opt_inheritance)
 end
 
----@generic O: manipulator.Region
----@param self `O`
 ---@param base manipulator.RangeType|{lines?:string[],text?:string}
----@return O
+---@return self
 function Region:new(base)
 	self = setmetatable(base or {}, self.buf and getmetatable(self) or self)
 	if (self.buf or 0) == 0 then self.buf = vim.api.nvim_get_current_buf() end
 	return self
 end
-
----@param override? table modifications to apply to the cloned object
-function Region:clone(override)
-	return setmetatable(U.tbl_inner_extend('keep', override or {}, self, 4), getmetatable(self))
-end
-
---- Create a copy of this node with different defaults. (always persistent)
---- Compared to `:clone()` the contents get reprocessed as if creating a new node.
----@generic O: manipulator.Region.Config
----@param config `O`|string
-function Region:with(config) return self:new(self:action_opts(config)) end
 
 ---@return integer|false # comparison of inclusion of range
 ---   - `false` if from different buffers
@@ -117,7 +104,7 @@ function Region:range1() return RANGE_U.offset(self:range0(), 1) end
 --- Get beginning of this range
 ---@return Range4 0-indexed point prepared as a range
 function Region:start()
-	local r = self:range0()
+	local _, r = RANGE_U.decompose(self)
 	r[3] = r[1]
 	r[4] = r[2]
 	return r
@@ -126,10 +113,102 @@ end
 --- Get beginning of this range
 ---@return Range4 0-indexed point prepared as a range
 function Region:end_()
-	local r = self:range0()
+	local _, r = RANGE_U.decompose(self)
 	r[1] = r[3]
 	r[2] = r[4]
 	return r
+end
+
+---@param override? {config?:table} modifications to apply to the cloned object
+---@return self
+function Region:clone(override)
+	return setmetatable(U.tbl_inner_extend('keep', override or {}, self, 4), getmetatable(self))
+end
+
+--- Create a copy of this node with different defaults. (always persistent)
+--- Compared to `:clone()` the contents get reprocessed as if creating a new node.
+---@generic O: manipulator.Region.Config
+---@param config O|string
+---@return self
+function Region:with(config)
+	return self:new {
+		range = self.range and {} or nil,
+		config = self:action_opts(config),
+	}
+end
+
+---@alias RangeMod (fun(self:manipulator.Region,opts):Range4)|'start'|'end'
+---@class manipulator.Region.rangemod.Opts
+--- What to base the calculations off of (default: self) - pre-processor
+--- - usually used for `'start'|'end'` or to set a new absolute `Range4` (`false` for `self`)
+---@field base? false|'start'|'end'|Range4
+--- Transform the range of the region before manipulation (i.e. include comma after the text etc.)
+--- Signle or multiple RangeMod functions taking `(self,opts)` into `Range4`
+---@field rangemod? false|RangeMod|RangeMod[]
+
+---@protected
+--- Apply various modifications to the range, directly modifying the range of self
+---@param opts manipulator.Region.mod.Opts|table
+---@param postprocess? manipulator.Region.mod.Opts|table|RangeMod[] final modifications specific to the caller action
+--- - usually used for `'start'|'end'` or a last rangemod (linewise, trim, etc.)
+---@return Range4
+function Region:rangemod(opts, postprocess)
+	local r = postprocess and postprocess.base or opts.base or select(2, RANGE_U.decompose(self))
+	if type(r) == 'string' then r = Region[r ~= 'start' and 'end_' or r](r) end
+
+	for stage, batch in ipairs { opts.rangemod, postprocess } do
+		-- merging to pass postprocess options to the user
+		if stage == 3 then opts = U.tbl_inner_extend('keep', postprocess or {}, opts) end
+		for _, v in ipairs(type(batch) == 'table' and batch or { batch or nil }) do
+			self.range = r
+			if type(v) == 'string' then
+				r = Region[v ~= 'start' and 'end_' or v](r)
+			else
+				r = v(self, opts)
+			end
+		end
+	end
+
+	return r
+end
+
+---@class manipulator.Region.mod.Opts: manipulator.Region.rangemod.Opts
+---@field text? string
+---@field text_relative? false|'start'|'end' should the range be adjusted to text size and to which end
+---@field ignore_last_nl? boolean should the last newline not count (default: true)
+--- How to decide if the region should be made linewise from end to end.
+--- - 'auto': if all excluded chars are whitespace on the active lines
+--- - 'last_nl': if the text ends with '\n'
+---@field linewise? boolean|'auto'|'last_nl'
+
+--- Create a new region with modifications (range dimensions / text content...)
+--- Compared to `:with()` this creates just a region - doesn't try to inherit anything.
+---@see manipulator.Region.rangemod
+---@param opts manipulator.Region.mod.Opts|table changes to be made + config for `.rangemod`. Order of changes:
+--- - 1. `rangemod` on the current region
+--- - 2. `text` is set and range adjusted based on `text_relative`
+--- - 3. `linewise` gets applied (use together with `text` is discouraged)
+---@return manipulator.Region
+function Region:mod(opts)
+	opts = opts or {}
+	local r = Region.rangemod(self, opts)
+
+	local text = opts.text or Region.get_text(self)
+	local lw = opts.linewise ~= 'last_nl' and opts.linewise or text:sub(#text) == '\n'
+
+	if opts.ignore_last_nl ~= false and text:sub(#text) == '\n' then text = text:sub(1, #text - 1) end
+	local lines = vim.split(text, '\n')
+	if opts.text_relative == 'start' then
+		r[3] = r[1] + (#lines - 1)
+		r[4] = (#lines == 1 and r[2] or 0) + (#lines[#lines] - 1)
+	elseif opts.text_relative == 'end' then
+		r[1] = r[3] - (#lines - 1)
+		r[2] = (#lines == 1 and (r[4] - (#lines[#lines] - 1)) or 0)
+	end
+
+	if lw then r = MODS.linewise(r, { linewise = lw }) end
+
+	return Region:new { range = r, buf = self.buf, text = text, lines = lines }
 end
 
 ---@param limit_or_fn? integer|manipulator.Batch.Action max iterations per action (-1= `M.config.recursive_limit`)
@@ -181,6 +260,17 @@ end
 ---@param action? 'a'|'r' `vim.fn.setqflist` action to perform - append or replace (default: 'a')
 function Region:add_to_qf(action) vim.fn.setqflist({ self:as_qf_item() }, action or 'a') end
 
+---@class manipulator.Region.set_reg.Opts: manipulator.Region.rangemod.Opts
+---@field register? string defaults to `vim.v.register`
+---@field type? 'v'|'V' by default determines by text being from start to end
+
+---@param opts manipulator.Region.set_reg.Opts
+function Region:set_reg(opts)
+	local r = Region.rangemod(self, opts)
+	local type = opts.type or (r[2] == 0 and r[4] == vim.v.maxcol and 'V' or 'v')
+	vim.fn.setreg(opts.register or vim.v.register, self.get_text(r), type)
+end
+
 do
 	local hl_ns = vim.api.nvim_create_namespace 'manipulator_hl'
 
@@ -223,66 +313,12 @@ function Region:mark(char)
 	return self
 end
 
----@class manipulator.Region.rangemod.Opts
----@field rangemod? false|integer|Range4|fun(self,opts):Range4|'string' transform the range of the region before manipulation (i.e. include comma after the text etc.)
----@field linewise? boolean|'auto' cover the lines from start to EOL? (auto: only over whitespace)
-
----@protected
----@param opts manipulator.Region.mod.Opts|table changes to be made + config for `.rangemod`
---- - `rangemod`: either added to all (`integer`), summed with (`Range4`), or applied to self
---- - `linewise`: extend to whole lines ('auto' to extend only over whitespace) (default: false)
----@param skip_linewise? boolean if linewise changes should be skipped
----@return Range4
-function Region:rangemod(opts, skip_linewise)
-	local r
-	local rm = opts.rangemod
-	if type(rm) == 'function' then
-		r = rm(self, opts)
-	elseif type(rm) == 'string' then
-		r = MODS[rm]
-		if not r then error('Invalid formatter: ' .. rm) end
-		r = r(self, opts)
-	else
-		_, r = RANGE_U.decompose(self)
-		if type(rm) == 'number' then
-			r = RANGE_U.offset(r, rm)
-		elseif rm then
-			r = RANGE_U.addRange(r, rm)
-		end
-	end
-
-	return skip_linewise and r or MODS.linewise(r, opts)
-end
-
----@class manipulator.Region.mod.Opts: manipulator.Region.rangemod.Opts
----@field text? string
----@field text_relative? false|'start'|'end' should the range be adjusted to text size and to which end
-
---- Create a new region with modifications (range dimensions / text content...)
---- Compared to `:with()` this creates just a region - doesn't try to inherit anything.
----@see manipulator.Region.rangemod
----@param opts manipulator.Region.mod.Opts|table changes to be made + config for `.rangemod`. Order of changes:
---- - 1. `rangemod` on the current region
---- - 2. `text` is set and range adjusted based on `text_relative`
---- - 3. `linewise` gets applied (use together with `text` is discouraged)
----@return manipulator.Region
-function Region:mod(opts)
-	opts = self:action_opts(opts, 'mod')
-	local r = self:rangemod(opts, true)
-
-	-- TODO: from text, offset etc.
-
-	r = Region.rangemod(r, { linewise = opts.linewise })
-
-	return Region:new { range = r, buf = self.buf, text = opts.text or self:get_text() }
-end
-
 ---@class manipulator.Region.jump.Opts: manipulator.Region.rangemod.Opts
----@field end_? boolean if the cursor should jump to the end of the selection (applied only when not in visual mode already) (default: true)
 ---@field insert? boolean should we enter insert mode (default: false)
 
 --- Jump to the start (or end, if `opts.end_`) of the region.
----@param opts? manipulator.Region.jump.Opts
+---@param opts? manipulator.Region.jump.Opts range defaults to 'end'
+--- - range options (which end to jump to) apply only outside visual modes
 function Region:jump(opts)
 	opts = self:action_opts(opts, 'jump')
 	local r = self:rangemod(opts)
@@ -300,7 +336,7 @@ function Region:select(opts)
 	opts = self:action_opts(opts, 'select')
 	if (self.buf or 0) ~= 0 then vim.api.nvim_win_set_buf(0, self.buf) end
 
-	local r = self:rangemod(opts, true)
+	local r = self:rangemod(opts)
 
 	local visual, leading, c_mode = RANGE_U.current_visual()
 	if visual and opts.allow_grow then
@@ -310,7 +346,7 @@ function Region:select(opts)
 		r[4] = math.max(r[4], visual[4])
 	end
 
-	local text_mode = Region.rangemod(r, { linewise = opts.linewise })[4] == vim.v.maxcol and 'V' or 'v'
+	local text_mode = MODS.linewise(r, { linewise = opts.linewise })[4] == vim.v.maxcol and 'V' or 'v'
 	if c_mode ~= text_mode then
 		if c_mode == 'i' then
 			if not opts.allow_select_mode then vim.cmd.stopinsert() end -- updates in the next tick
@@ -349,7 +385,7 @@ function Region:paste(opts)
 	if not text and opts.dst then
 		text = self:get_text()
 	elseif not text or text:match '^".$' then
-		local reg = text and text:sub(2, 2) or vim.v.register
+		local reg = text and text:sub(2) or vim.v.register
 		text = vim.fn.getreg(reg)
 
 		if not text then
@@ -386,9 +422,7 @@ function Region:paste(opts)
 		{ range = RANGE_U.lsp_range(range), newText = text },
 	}, buf, 'utf-8')
 
-	local ret = M.from_text(text, range, true)
-	ret.buf = self.buf
-	return ret
+	return self:mod { base = range, text = text, text_relative = 'start', ignore_last_nl = true }
 end
 
 ---@class manipulator.Region.swap.Opts
@@ -522,7 +556,7 @@ do
 	---@field highlight? string|false highlight group to use, suggested to specify with custom {group} (default: 'IncSearch')
 	---@field allow_grow? boolean if selected region can be updated to the current when its fully contained or should be deselected
 	---@field run_on_queued? boolean should the action be run on the queued node or on the pairing one
-	---@field dst? nil
+	---@field dst? manipulator.RangeType ignored
 
 	--- Move the node to a given position
 	---@param opts? manipulator.Region.queue_or_swap.Opts included action options used only on run call
@@ -599,25 +633,6 @@ do -- ### Wrapper for nil matches
 	Region.Nil = setmetatable(NilRegion, NilRegion)
 end
 
----@param range manipulator.RangeType|{lines?:string[],text?:string}
----@return manipulator.Region
-function M.from(range) return Region:new(range) end
-
----@param text string
----@param offset? Range2
----@param ignore_eol? boolean if last newline should not count as another line (default: true)
----@return manipulator.Region
-function M.from_text(text, offset, ignore_eol)
-	-- TODO: make into a method call opts={text?,offset?, linewise???}
-	-- NOTE: correctly should set the whole object as linewise
-	if ignore_eol ~= false and text:sub(#text) == '\n' then text = text:sub(1, #text - 1) end
-	local lines = vim.split(text, '\n')
-	offset = offset or { 0, 0 }
-	offset[3] = offset[1] + #lines - 1
-	offset[4] = (#lines == 1 and offset[2] or 0) + #lines[#lines] - 1
-	return Region:new { range = offset, lines = lines, text = text }
-end
-
 ---@class manipulator.Region.module.current.Opts options for retrieving various kinds of user position
 ---@field src? # where to source the position / range from
 ---| 'prefer-visual'|manipulator.VisualModeEnabler # map of modes for which to return visual range, fallback to cursor (default)
@@ -633,7 +648,7 @@ end
 --- Get mouse click position or currently selected region and cursor position
 ---@param opts? manipulator.Region.module.current.Opts use {} for disabling visual mode
 ---@return manipulator.Region # object of the selected region (point or range)
----@return boolean? is_visual true if the range is from visual mode or `mode='operator'`
+---@return boolean is_visual true if the range is from visual mode or `mode='operator'`
 --- - can return false while user is in visual mode
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
@@ -650,8 +665,7 @@ function M.current(opts)
 
 	if not r then
 		r = RANGE_U.get_point_bufrange(opts.src, opts.insert_fixer)
-		buf = r.buf
-		r = r.range
+		buf, r, mode = r.buf, r.range, nil
 	end
 
 	local lw = opts.linewise or 'extend'
@@ -660,7 +674,7 @@ function M.current(opts)
 		r[4] = #vim.api.nvim_buf_get_lines(0, r[3], r[3] + 1, true)[1] - 1
 	end
 
-	return M.from { buf = buf, range = r }, not not mode
+	return Region:new { buf = buf, range = r }, not not mode
 end
 
 return M

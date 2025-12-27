@@ -173,6 +173,10 @@ end
 M.debug = false ---@type false|vim.log.levels
 
 ---@override
+---@generic O: manipulator.TS.Opts
+---@param opts? O|string user options to get expanded - updated **inplace**
+---@param action? string
+---@return O # opts expanded for the given method
 function TS:action_opts(opts, action)
 	if type(opts) == 'table' and opts.save_as then
 		M.config.presets[opts.save_as] = opts
@@ -211,6 +215,9 @@ function TS:new(opts, node, ltree)
 end
 
 ---@override
+---@generic O: manipulator.TS.Opts
+---@param config O|string
+---@return self
 function TS:with(config) return self:new(self:action_opts(config), self.node) end
 
 ---@param opts manipulator.TS.Opts
@@ -338,7 +345,7 @@ do -- ### Wrapper for nil TSNode matches
 	function TS.Nil:is_valid_in() return false end
 end
 
----@class manipulator.TS.module.get.Opts: manipulator.TS.Config
+---@class manipulator.TS.module.get.Opts: manipulator.TS.Opts irl inherits the whole config
 ---@field buf? integer Buffer number (default: 0)
 ---@field range Range4 0-indexed range: {start_row, start_col, end_row, end_col}
 ---@field persistent? boolean should opts be saved as the default for the node (default: false)
@@ -354,6 +361,7 @@ function M.get_all(opts)
 	if not ltree then return Batch:new({}, TS.Nil, TS.Nil) end
 
 	local types = opts.types
+	assert(types)
 	local nodes = {} ---@type manipulator.TS[]
 	ltree:for_each_tree(function(tree, lt)
 		if lt ~= ltree or not opts.langs or not opts.langs[ltree:lang()] then return end
@@ -388,43 +396,48 @@ function M.get(opts)
 	opts = M:action_opts(opts, 'get')
 
 	local ltree = vim.treesitter.get_parser(opts.buf or 0)
-	opts.buf = nil
 	if not ltree then return TS:new(opts) end
-	local range = opts.range
-	range[4] = range[4] + 1
-	opts.range = nil
-	-- slow, but we have no other way to get the language info (and ltree) the node is in
-	if opts.langs then ltree = ltree:language_for_range(range) end
 
-	local ret = TS:new(opts, ltree:named_node_for_range(range), ltree)
+	opts.range[4] = opts.range[4] + 1
+	if opts.langs then ltree = ltree:language_for_range(opts.range) end
+
+	local ret = TS:new(opts, ltree:named_node_for_range(opts.range), ltree)
+	opts.range[4] = opts.range[4] - 1
 	return ret and opts.persistent and ret:with(opts) or ret
 end
 
 ---@class manipulator.TS.module.current.Opts: manipulator.TS.module.get.Opts,manipulator.Region.module.current.Opts
 ---@field on_partial? 'larger'|'cursor'|'nil' when visual selection doesn't cover the node fully, what node should we return (default: 'larger')
----@field range? nil ignored
+---@field range? Range4 determined automatically through `src`
 
 ---@param opts? manipulator.TS.module.current.Opts persistent by default
 ---@return manipulator.TS?
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
-	local region, visual = Region.current(opts)
-	opts.range = region:range0()
+	local r, visual
+	if not opts.range then
+		r, visual = Region.current(opts)
+		opts.range = r:range0()
+	end
 
 	local ret = M.get(opts) -- get the primary chosen node
-	if not ret or not ret.node then return ret end
 
-	-- if selection is smaller than the chosen node decide what to do
-	if visual and opts.on_partial ~= 'larger' and RANGE_U.rangeContains(ret:range0(), region:range0()) > 0 then
-		if opts.on_partial == 'nil' then return TS:new(opts) end
+	if ret and ret.node then
+		-- if selection is smaller than the chosen node decide what to do
+		if visual and opts.on_partial ~= 'larger' and RANGE_U.rangeContains(ret:range0(), opts.range) > 0 then
+			if opts.on_partial == 'nil' then return TS:new(opts) end
 
-		---@diagnostic disable-next-line: cast-local-type
-		region = RANGE_U.get_point_bufrange('.', opts.insert_fixer)
-		opts.range = region.range
-		opts.buf = region.buf
-		ret = M.get(opts)
+			local bufrange = RANGE_U.get_point_bufrange('.', opts.insert_fixer)
+			opts.range = bufrange.range
+			opts.buf = bufrange.buf
+			ret = M.get(opts)
+		end
+	end
+
+	if visual ~= nil then -- opts.range was generated -> cleanup
 		opts.buf = nil
+		opts.range = nil
 	end
 
 	return ret
