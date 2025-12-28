@@ -190,7 +190,7 @@ do -- ### config inheritance/extension helpers
 		presets[true] = super
 		config = type(config) ~= 'table' and { inherit = config } or config ---@type table
 
-		local last, preset
+		local last, preset = config, nil ---@type table?
 		while config.inherit ~= false do
 			preset = presets[config.inherit or true]
 			if not preset or preset == last then -- prevent recursion
@@ -233,31 +233,37 @@ do -- ### config inheritance/extension helpers
 	--- - such as: `cfg={ presets={['P1']={ [action] = {def_val=1} }}, [action] = { inherit='P1' } }`
 	--- Can inherit only from other actions, or its parent.
 	--- Actions should be mapped to their defaults in {opt_inheritance}.
-	function M.expand_action(config, action, opt_inheritance)
+	function M.expand_action(presets, action, opt_inheritance)
+		presets[true] = presets
 		action = action or ''
 		-- start with the action defaults so that the defaults get saved
-		local act_opts = config[action] or {}
+		local config = presets[action] or {}
 		local p_name = opt_inheritance[action]
 
-		while act_opts.inherit ~= false do -- resolve presets for the action
-			if act_opts.inherit == nil then act_opts.inherit = p_name or true end
+		local last, preset = config, nil
+		while config.inherit ~= false do -- resolve presets for the action
+			if config.inherit == nil then config.inherit = p_name or true end
 
-			if act_opts.inherit == true then
-				act_opts.inherit = nil
-				M.tbl_inner_extend('keep', act_opts, config)
+			p_name = opt_inheritance[config.inherit] -- default parent of the inherited action
+			preset = presets[config.inherit]
+			if preset then
+				if preset == last then
+					error('Invalid action: ' .. config.inherit .. ' while resolving action: ' .. action)
+				end
+				last = preset
+
+				config.inherit = nil
+				M.tbl_inner_extend('keep', config, preset)
 			else
-				p_name = opt_inheritance[act_opts.inherit] -- default parent of the inherited action
-				local preset = config[act_opts.inherit]
-				act_opts.inherit = nil
-				if preset then M.tbl_inner_extend('keep', act_opts, preset) end
+				config.inherit = nil
 			end
 		end
 
 		-- local not_cfg = opt_inheritance[action] -- static fns don't inherit
-		act_opts[action] = nil -- avoid inheriting itself from the base cfg
+		config[action] = nil -- avoid inheriting itself from the base cfg
 
 		for key, is_action in pairs(opt_inheritance) do -- action keys can inherit only from parent
-			local val = act_opts[key]
+			local val = config[key]
 			if is_action then -- action cfg doesn't get saved and reused -> other act opts useless
 				-- NOTE: disabled action ref cleanup until a better solution for rangemod full user opts access
 				-- even when enabled there will be ptr recursion
@@ -266,12 +272,14 @@ do -- ### config inheritance/extension helpers
 			elseif type(val) == 'table' and rawget(val, 'inherit') then -- avoid enablers
 				if val.inherit == true then -- NOTE: presets in keys get resolved by expand_config later
 					val.inherit = nil
-					if config[key] then M.tbl_inner_extend('keep', val, config[key]) end
+					if presets[key] then M.tbl_inner_extend('keep', val, presets[key]) end
 				end
 			end
 		end
 
-		return act_opts
+		presets[true] = nil
+		config[true] = nil
+		return config
 	end
 
 	--- Expands `config` and `config.actions[action]` into {opts}.
