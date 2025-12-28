@@ -69,7 +69,7 @@ function M.top_identity(opts, node, ltree, return_parent)
 
 		if not parent and langs then
 			otree = ltree
-			ltree = ltree:parent()
+			ltree = ltree:parent() -- we expect only the bottom langs to be disabled -> no check here
 			if ltree then parent = ltree:node_for_range { node:range() } end
 		end
 
@@ -166,23 +166,20 @@ end
 ---@field max_descend? integer|false how many lower levels to scan for a result (not necessarily direct child)
 ---@field max_ascend? integer|false the furthest parent to consider returning
 ---@field max_link_dst? integer|false how far from the original can the common ancestor be (<= `max_ascend`)
----@field start_point? 'cursor'|Range2 0-indexed, from where to start looking for nodes
----@field compare_end? boolean should we look in direction by end of node or start
+---@field start_point? pos_expr|Range2 0-indexed, from where to start looking for nodes
+--- Should we look in direction by end of node or start.
+--- In 'prev' search can enforce no parent can be selected (end_() will always be after self:start())
+---@field compare_end? boolean
 -- ---@field match string scheme query to match TODO
 
 ---@type fun(direction:'prev'|'next',opts:manipulator.TS.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
 function M.search_in_graph(direction, opts, node, ltree)
 	local types = opts.types ---@type manipulator.Enabler
-	local max_depth = opts.max_descend or math.huge
-	local min_shared = -(opts.max_link_dst or math.huge)
-	local min_depth = -(opts.max_ascend or math.huge)
+	local max_depth = opts.max_descend or vim.v.maxcol
+	local min_shared = -(opts.max_link_dst or vim.v.maxcol)
+	local min_depth = -(opts.max_ascend or vim.v.maxcol)
 	local cmp_fn = opts.compare_end and node.end_ or node.start
-
-	local function start_point_to_byte(sp, fallback)
-		if sp == 'cursor' then sp = RANGE_U.get_point '.' end
-		return sp and (vim.fn.line2byte(sp[1] + 1) - 1 + sp[2]) or fallback
-	end
 
 	local o_range = { node:range() }
 	local depth = 0
@@ -193,7 +190,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 	end
 
 	if direction == 'prev' then
-		local base_point = math.min(select(3, node:start()), start_point_to_byte(opts.start_point, math.huge))
+		local base_point = math.min(select(3, node:start()), RANGE_U.point_to_byte(opts.start_point, vim.v.maxcol))
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
 		while continue() do
@@ -218,7 +215,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 	else -- direction == 'next'
 		local base_point = math.max(
 			opts.allow_child and select(3, node:start()) or select(3, node:end_()),
-			start_point_to_byte(opts.start_point, -1)
+			RANGE_U.point_to_byte(opts.start_point, -1)
 		)
 		ok_range = function(node) return select(3, cmp_fn(node)) > base_point end
 

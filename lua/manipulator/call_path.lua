@@ -71,8 +71,8 @@ local CallPath = {}
 ---@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
 ---@field class manipulator.CallPath
 local M = U.static_wrap_for_oop(CallPath, {
-	__index = function(_, key) return CallPath:new({ item = mod_wrap })[key] end,
-	__call = function(self, args) return self:new(args) end,
+	__index = function(_, key) return CallPath:new(mod_wrap)[key] end,
+	__call = function(self, ...) return self:new(...) end,
 })
 
 ---@type manipulator.CallPath.Config
@@ -110,19 +110,22 @@ function CallPath:action_opts(opts, action)
 		or {}
 end
 
----@param o? manipulator.CallPath.Config|{item?: table} clones itself if {item} is not provided
----@return manipulator.CallPath
-function CallPath:new(o)
-	---@cast o manipulator.CallPath
-	o = o or {}
-	o.path = {} -- specifying before extending to ensure the path object is modifiable
-	o.running = false
-
+---@generic I
+---@param item? I clones itself if {item} is not provided
+---@param config? manipulator.CallPath.Config
+---@return manipulator.CallPath<I>
+function CallPath:new(item, config)
 	-- copies the path contents, not the path obj itself -> modification-independent
 	-- relies on the CallInfo to be immutable
-	o = U.tbl_inner_extend('keep', o, self.path and self or { config = M.config, idx = 0 }, 1)
+	self = U.tbl_inner_extend(
+		'keep',
+		{ config = config, path = {}, running = false },
+		self.path and self or { config = M.config, idx = 0 },
+		1
+	)
+	self.item = item or self.item
 
-	return setmetatable(o, CallPath)
+	return setmetatable(self, CallPath)
 end
 
 ---@private
@@ -220,15 +223,14 @@ end
 --- NOTE: anchores are ignored -> if it is followed by an anchor and
 --- then an index that index will get marked as a motion.
 ---
---- NOTE: Type annotation commented, until lsp_lua fixes inheritance in generics
----
---[[ ---@generic P: manipulator.CallPath
----@param self `P`
+---@generic P: manipulator.CallPath
+---@param self P
 ---@param target manipulator.Batch.Action|'on_next' what to apply the count onto
 ---@param on_fail? manipulator.MotionOpt if we should inform the user about failing to do enough
 ---   interations, or carry on (accepting the last good value or giving an error) (default: 'print')
----@return `P` self copy ]]
+---@return P self copy
 function CallPath:with_count(target, on_fail)
+	---@diagnostic disable-next-line: undefined-field
 	if self.config.immutable then self = self:new() end
 
 	local as_motion = U.get_or(on_fail, 'print') or 'ignore'

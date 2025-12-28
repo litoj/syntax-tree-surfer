@@ -1,8 +1,5 @@
 ---@class manipulator.range_utils
----@field false_end_in_insert string luapat to determine if the char is a valid part of a region or if the region should end 1 char earlier
-local M = {
-	false_end_in_insert = '[, ]',
-}
+local M = {}
 
 ---@class manipulator.BufRange
 ---@field range Range4 0-indexed range with the buf number
@@ -139,46 +136,21 @@ do -- ### Current state helpers
 		return lines
 	end
 
-	--- Shift the end by -1 if EOL is selected or the char falls under `pattern`
-	---@param point Range2 0-indexed
-	---@param pattern? string|boolean luapat testing if the char is extra (default: `M.false_end_in_insert`)
-	---   - trims only EOL if set to `false`
-	---@return Range2 point
-	function M.fix_end(buf, point, pattern)
-		if point[2] == 0 then return point end
-		local char = vim.api.nvim_buf_get_lines(buf, point[1], point[1] + 1, true)[1]:sub(point[2] + 1, point[2] + 1)
-		if
-			char == ''
-			or (pattern ~= false and char:match(type(pattern) == 'string' and pattern or M.false_end_in_insert))
-		then
-			point[2] = point[2] - 1
-		end
-		return point
-	end
-
-	---@param point manipulator.RangeType 0-indexed point
-	---@param insert_after? boolean should the cursor come after the point in 's'/'i' mode
-	---@param start_insert? boolean should we enter insert mode
-	function M.jump(point, insert_after, start_insert)
+	---@param point manipulator.RangeType|Range2 0-indexed point
+	function M.jump(point)
 		local buf, range = M.decompose(point)
-		local mode = vim.fn.mode()
-		if mode == 'i' or mode == 's' or start_insert then
-			M.fix_end(buf, range) -- shifts back by one if at EOL
-			if insert_after then range[2] = range[2] + 1 end -- to be after the selection
-			if start_insert and mode ~= 'i' then vim.cmd.startinsert() end
-		end
-
-		vim.api.nvim_win_set_buf(0, buf)
+		vim.api.nvim_set_current_buf(buf)
 		vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
 	end
 
 	---@alias pos_expr 'mouse'|"'x"|'.'|'v'|"'["|"']"|"'<"|"'>"|string
 
 	---@see vim.fn.getpos
-	---@param expr pos_expr expr for vim.fn.getpos or 'mouse' for mouse pos
+	---@param expr? pos_expr expr for vim.fn.getpos or 'mouse' for mouse pos
 	---@return Range2 point or an error, if the mark doesn't exist
 	---@return integer? buf
 	function M.get_point(expr)
+		if not expr then expr = '.' end
 		-- vim.fn.getpos can parse all inputs, but is half as fast
 		if #expr == 2 or expr == '.' then
 			local r = expr == '.' and vim.api.nvim_win_get_cursor(0) or vim.api.nvim_buf_get_mark(0, expr:sub(2))
@@ -198,15 +170,38 @@ do -- ### Current state helpers
 		end
 	end
 
+	---@param point Range2|Range4|pos_expr
+	---@param fallback? integer should be provided if pos_expr points to a mark
+	---@return integer
+	function M.point_to_byte(point, fallback)
+		if type(point) ~= 'table' then point = M.get_point(point) end
+		if not point then return fallback end
+		return vim.fn.line2byte(point[1] + 1) - 1 + point[2]
+	end
+
+	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
+	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
+
 	--- Get a range from the current buffer
 	---@see manipulator.range_utils.get_point
-	---@param s_expr pos_expr
-	---@param e_expr? pos_expr
+	---@param s_expr pos_expr|manipulator.VisualModeEnabler|'visual'
+	---@param e_expr? pos_expr same as `s_expr` if not provided, or `'.'` for visual mode enabler
 	---@param order? boolean should we reorder the expressions to ensure s<e
-	---@return Range4 range
-	---@return integer buf buffer of the s_expr
-	---@return boolean swapped if the order of expressions was changed to make a positive range
+	---@return Range4? range
+	---@return integer? buf buffer of the s_expr
+	---@return boolean? swapped if the order of expressions was changed to make a positive range
 	function M.get_range(s_expr, e_expr, order)
+		if type(s_expr) == 'table' or s_expr == 'visual' then
+			local modes = type(s_expr) == 'table' and s_expr
+				or { v = true, V = true, ['\022'] = true, s = true, S = true }
+			if modes[vim.fn.mode()] then
+				s_expr = 'v'
+				e_expr = '.'
+			else
+				return nil, nil
+			end
+		end
+
 		local from, buf = M.get_point(s_expr)
 		local to = e_expr and M.get_point(e_expr) or from
 
@@ -222,51 +217,6 @@ do -- ### Current state helpers
 		from[3] = to[1]
 		from[4] = to[2]
 		return from, buf, swapped
-	end
-
-	---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
-	---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
-
-	---@param modes? manipulator.VisualModeEnabler map of modes allowed to get visual range for ({} to disable)
-	---@param end_fixer? string|boolean pattern to check for -1 offset necessity (default: true to adjust EOL)
-	---@return Range4? 0-indexed
-	---@return boolean? leading if cursor was at the beginning of the current selection
-	---@return manipulator.VisualMode mode
-	function M.current_visual(modes, end_fixer)
-		if type(modes) ~= 'table' then modes = { v = true, V = true, ['\022'] = true, s = true } end
-		local mode = vim.fn.mode()
-		if not modes[mode] then return nil, nil, mode end
-
-		local r, _, leading = M.get_range('v', '.', true) -- ignores linewise mode being whole lines
-
-		if end_fixer ~= false then -- all visual modes can select the EOL
-			-- TODO: allow arbitrary range edit fn
-			local tmp = M.fix_end(0, { r[3], r[4] }, mode == 's' and (end_fixer or true) or false)
-			r[4] = tmp[2]
-		end
-
-		return r, leading, mode
-	end
-
-	-- TODO: merge with current_visual
-	---@param expr? pos_expr if mouse or cursor position should be retrieved
-	---@param insert_fixer? string|boolean pattern to check for -1 offset necessity (default: true = fixes spaces)
-	---@return manipulator.BufRange
-	function M.get_point_bufrange(expr, insert_fixer)
-		local r, b = M.get_range(expr or '.')
-		local ret = { buf = b, range = r, mouse = expr == 'mouse' }
-		if ret.mouse then return ret end
-		local mode = vim.fn.mode()
-
-		if mode ~= 'n' and insert_fixer ~= false then -- ensure we're not selecting eol
-			---@diagnostic disable-next-line: param-type-mismatch
-			M.fix_end(b, r, (mode == 'i' or mode == 's') and (insert_fixer or true) or false)
-			r[4] = r[2]
-		end
-
-		if mode == 'i' then r[4] = r[4] - 1 end -- make the active region being 0 chars long
-
-		return ret
 	end
 end
 

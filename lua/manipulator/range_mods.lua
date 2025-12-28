@@ -2,29 +2,33 @@ local U = require 'manipulator.utils'
 local RANGE_U = require 'manipulator.range_utils'
 
 ---@class manipulator.range_mods
----@field [string] fun(self:manipulator.RangeType,opts:unknown):Range4
 local M = {}
 
----@param self manipulator.RangeType
----@param opts {linewise: boolean|'auto'} select whole lines? ('auto': only over whitespace)
+---@class manipulator.range_mods.linewise.Opts
+--- Should whole lines be selected - not just the range ('if_trimmable' = only over whitespace)
+---@field linewise? boolean|'if_trimmable'|fun(self:manipulator.RangeType, opts:unknown):boolean?
+
+---@param opts manipulator.range_mods.linewise.Opts
 function M.linewise(self, opts)
 	local buf, r = RANGE_U.decompose(self, false)
+
 	local lw = opts.linewise
 	if
 		lw == true
+		or (type(lw) == 'function' and lw(self, opts))
 		or (
-			lw == 'auto'
+			lw == 'if_trimmable'
 			and not vim.api.nvim_buf_get_lines(buf, r[1], r[1] + 1, true)[1]:sub(1, r[2]):match '%S'
 			and not vim.api.nvim_buf_get_lines(buf, r[3], r[3] + 1, true)[1]:sub(r[4] + 2):match '%S'
 		)
 	then
-		return { r[1], 0, r[3], vim.v.maxcol }
-	else
-		return r
+		r[2] = 0
+		r[4] = vim.v.maxcol
 	end
+
+	return r
 end
 
----@param self manipulator.RangeType
 function M.trimmed(self)
 	local _, range = RANGE_U.decompose(self)
 	local lines = RANGE_U.get_lines(self, true)
@@ -70,6 +74,35 @@ function M.trimmed(self)
 	end
 
 	return range
+end
+
+---@class manipulator.range_mods.end_shift.Opts
+---@field end_shift_ptn? string luapat to determine if a by-one shift in position should be done
+--- How to manipulate the matching end
+--- - 1 to add the matching end, -1 to exclude it from the range (default)
+--- - `'insert'`: -1 if matching, and on top always add 1 if we're in insert/select mode
+---@field shift_mode? 'insert'|1|-1
+
+do -- end_shift with adjustment for insert mode
+	local insert_modes = { i = 1, s = 1, S = 1 }
+
+	--- Shift the end by -1 if EOL is selected or the char falls under `opts.endfix`.
+	--- Shifts the whole region if it was just 1 char wide.
+	---@param opts? manipulator.range_mods.end_shift.Opts
+	---@return Range4 point returns `Range2` if `self` was `Range2`
+	function M.end_shift(self, opts)
+		opts = opts or {}
+		local buf, r = RANGE_U.decompose(self)
+
+		local line, col = r[3] or r[1], (r[4] or r[2]) + (opts.shift_mode == 1 and 1 or -1)
+		local char = vim.api.nvim_buf_get_lines(buf, line, line + 1, true)[1]:sub(col + 1, col + 1)
+
+		col = char:match(opts.end_shift_ptn or '^[, ]?$') and (opts.shift_mode == 1 and 1 or -1) or 0
+		if opts.shift_mode == 'insert' and insert_modes[vim.fn.mode()] then col = col + 1 end
+
+		r[4] = r[4] + col
+		return r
+	end
 end
 
 ---@param self manipulator.TS

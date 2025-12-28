@@ -63,10 +63,9 @@ do -- ### module helpers
 		return function(arg_self, ...) return real_self[key](arg_self == fake_self and real_self or arg_self, ...) end
 	end
 
-	---@generic I
-	---@generic O
-	---@param oop `I` the class we want to add some extra fn to without being visible in the class
-	---@param static `O`|table object with static methods that should not be visible from {oop}
+	---@generic I,O
+	---@param oop I the class we want to add some extra fn to without being visible in the class
+	---@param static O|table object with static methods that should not be visible from {oop}
 	---@return O|I|{class:I} static delegating all {oop} functionality back to {oop}
 	function M.static_wrap_for_oop(oop, static)
 		rawset(static, 'class', oop)
@@ -84,8 +83,9 @@ do -- ### module helpers
 	end
 end
 
+--- Helper to distinguish `nil` from `false`
 ---@generic V,D
----@param val `V`
+---@param val V
 ---@param default D
 ---@return V|D
 function M.get_or(val, default)
@@ -253,7 +253,7 @@ do -- ### config inheritance/extension helpers
 			end
 		end
 
-		local not_cfg = opt_inheritance[action] -- static fns don't inherit
+		-- local not_cfg = opt_inheritance[action] -- static fns don't inherit
 		act_opts[action] = nil -- avoid inheriting itself from the base cfg
 
 		for key, is_action in pairs(opt_inheritance) do -- action keys can inherit only from parent
@@ -274,11 +274,12 @@ do -- ### config inheritance/extension helpers
 		return act_opts
 	end
 
-	--- Expands `opts.actions[action]` into {opts}.
+	--- Expands `config` and `config.actions[action]` into {opts}.
+	--- If `config` has not been expanded yet, it will be first.
 	---@generic O: manipulator.Inheritable
 	---@param config { [string]: O, presets: {[string]: O|{[string]: O}} }
 	---@param opts? `O`|string user options specifically for the action, will get modified
-	---@param action? string
+	---@param action? string no action is considered a request for just expanded config into `{opts}`
 	---@param opt_inheritance {[string]: boolean|string} keys with inheritance defaults
 	---@return O
 	function M.get_opts_for_action(config, opts, action, opt_inheritance)
@@ -289,8 +290,10 @@ do -- ### config inheritance/extension helpers
 
 		local act_opts = M.expand_action(
 			-- new table with inheritance to distinguish inherited keys from explicit user options
-			opts.inherit == nil and config
-				or M.expand_config(config.presets, config, { inherit = opts.inherit }, opt_inheritance),
+			-- also resolve, if config is just a template
+			(opts.inherit or config.inherit)
+					and M.expand_config(config.presets, config, { inherit = opts.inherit }, opt_inheritance)
+				or config,
 			action,
 			opt_inheritance
 		)
