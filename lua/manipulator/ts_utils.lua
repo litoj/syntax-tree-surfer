@@ -2,7 +2,7 @@
 ---@class manipulator.ts_utils
 local M = {}
 
-local RANGE_U = require 'manipulator.range_utils'
+local Range = require 'manipulator.range'
 
 ---@param opts manipulator.TS.Opts
 ---@param node TSNode
@@ -16,7 +16,7 @@ function M.valid_parented_node(opts, node, return_node, new, prefer_new)
 	if not prefer_new and opts.types[node:type()] then return_node = node end
 
 	-- have we found a node of a different size?
-	if new and RANGE_U.rangeContains({ node:range() }, { new:range() }) ~= 0 then
+	if new and not Range.__eq({ node:range() }, { new:range() }) then
 		if prefer_new then
 			if opts.types[new:type()] then return true, new end
 		else
@@ -140,7 +140,7 @@ function M.get_child(opts, node, ltree, idx)
 			node = child
 			child, ltree = M.get_direct_child(opts, child, ltree, idx)
 			if child then
-				if RANGE_U.rangeContains({ node:range() }, { child:range() }) ~= 0 then break end
+				if not Range.__eq({ node:range() }, { child:range() }) then break end
 				cnt = child:named_child_count()
 			else
 				break
@@ -186,11 +186,11 @@ function M.search_in_graph(direction, opts, node, ltree)
 	local tmp, tmp_tree = nil, ltree
 	local ok_range
 	local continue = function()
-		return node and not (types[node:type()] and ok_range(node) and not RANGE_U.equal({ node:range() }, o_range))
+		return node and not (types[node:type()] and ok_range(node) and not Range.__eq({ node:range() }, o_range))
 	end
 
 	if direction == 'prev' then
-		local base_point = math.min(select(3, node:start()), RANGE_U.point_to_byte(opts.start_point, vim.v.maxcol))
+		local base_point = math.min(select(3, node:start()), Range.to_byte(opts.start_point, vim.v.maxcol))
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
 		while continue() do
@@ -215,7 +215,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 	else -- direction == 'next'
 		local base_point = math.max(
 			opts.allow_child and select(3, node:start()) or select(3, node:end_()),
-			RANGE_U.point_to_byte(opts.start_point, -1)
+			Range.to_byte(opts.start_point, -1)
 		)
 		ok_range = function(node) return select(3, cmp_fn(node)) > base_point end
 

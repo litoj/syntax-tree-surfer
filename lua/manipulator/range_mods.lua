@@ -1,27 +1,41 @@
 local U = require 'manipulator.utils'
-local RANGE_U = require 'manipulator.range_utils'
+local Range = require 'manipulator.range'
 
 ---@class manipulator.range_mods
 local M = {}
 
+---@alias linewise_opt boolean|'auto'|fun(self:anypos, opts:unknown):boolean?
+
 ---@class manipulator.range_mods.linewise.Opts
---- Should whole lines be selected - not just the range ('if_trimmable' = only over whitespace)
----@field linewise? boolean|'if_trimmable'|fun(self:manipulator.RangeType, opts:unknown):boolean?
+---@field linewise? linewise_opt
+---@field linewise_start? string luapat to match the unselected start of the line to be added by linewise
+---@field linewise_end? string luapat to match the unselected start of the line to be added by linewise
 
----@param opts manipulator.range_mods.linewise.Opts
-function M.linewise(self, opts)
-	local buf, r = RANGE_U.decompose(self, false)
+--- Should whole lines be selected - not just the range
+---@param opts manipulator.range_mods.linewise.Opts|table
+---@param lw? linewise_opt behaviour override
+--- - `'auto'`: decide by matching lua patterns on start and/or end
+---@return boolean
+function M.evaluate_linewise(self, opts, lw)
+	local r = Range.get_or_make(self)
+	lw = U.get_or(lw, opts.linewise)
 
-	local lw = opts.linewise
-	if
-		lw == true
+	return lw == true
 		or (type(lw) == 'function' and lw(self, opts))
 		or (
-			lw == 'if_trimmable'
-			and not vim.api.nvim_buf_get_lines(buf, r[1], r[1] + 1, true)[1]:sub(1, r[2]):match '%S'
-			and not vim.api.nvim_buf_get_lines(buf, r[3], r[3] + 1, true)[1]:sub(r[4] + 2):match '%S'
+			lw == 'auto'
+			and r:start():get_line():sub(1, r[2]):match(opts.linewise_start or '^%s*$') --
+			and r:end_():get_line():sub(r[4] + 2):match(opts.linewise_end or '^%s*$')
 		)
-	then
+		or false
+end
+
+---@see manipulator.range_mods.validate_linewise
+---@param opts manipulator.range_mods.linewise.Opts|table
+---@return manipulator.Range
+function M.linewise(self, opts, lw)
+	local r = Range.get_or_make(self)
+	if M.evaluate_linewise(self, opts, lw) then
 		r[2] = 0
 		r[4] = vim.v.maxcol
 	end
@@ -29,16 +43,23 @@ function M.linewise(self, opts)
 	return r
 end
 
-function M.trimmed(self)
-	local _, range = RANGE_U.decompose(self)
-	local lines = RANGE_U.get_lines(self, true)
+---@class manipulator.range_mods.trimmed.Opts
+---@field trimm_start string lua pattern to determine what should be trimmed from the start
+---@field trimm_end string lua pattern to determine what should be trimmed from the end
+
+---@param opts manipulator.range_mods.trimmed.Opts
+---@return manipulator.Range
+function M.trimmed(self, opts)
+	local r = Range.get_or_make(self)
+	local lines = r:get_lines(true)
+	local s_ptn, e_ptn = opts.trimm_start or '^%s*', opts.trimm_end or '%s*$'
 
 	-- Trim leading whitespace
 	local s_l = 1
-	local s_c = range[2]
+	local s_c = r[2]
 	while s_l <= #lines do
 		local line = lines[s_l]
-		local space = #(line:match '^%s*')
+		local space = #(line:match(s_ptn) or '')
 
 		if space >= #line then
 			s_l = s_l + 1
@@ -51,12 +72,17 @@ function M.trimmed(self)
 
 	-- Trim trailing whitespace
 	local e_l = #lines
-	local e_c = range[4] - (#lines == 1 and range[2] or 0)
+	-- NOTE: trims linewise mode back into a normal range!
+	local e_c = math.min(r[4], #r:end_():get_line() - 1) - (#lines == 1 and r[2] or 0)
 	while e_l >= s_l do
 		local line = lines[e_l]
-		local space = #(line:match '%s*$')
+		local space = #(line:match(e_ptn) or '')
 
 		if space >= #line then
+			if s_l == e_l then
+				e_c = s_c - 1
+				break
+			end
 			e_l = e_l - 1
 			e_c = #lines[e_l] - 1
 		else
@@ -66,18 +92,19 @@ function M.trimmed(self)
 	end
 
 	if s_l <= e_l then -- update only if there is text left
-		range[3] = range[1] + e_l - 1 -- update the end before the start gets overriden
-		range[4] = e_l == 1 and (range[2] + e_c) or e_c -- shift by the truncated start
+		r[3] = r[1] + e_l - 1 -- update the end before the start gets overriden
+		r[4] = e_l == 1 and (r[2] + e_c) or e_c -- shift by the truncated start
 
-		range[1] = range[1] + s_l - 1
-		range[2] = s_c
+		r[1] = r[1] + s_l - 1
+		r[2] = s_c
 	end
 
-	return range
+	return r
 end
 
 ---@class manipulator.range_mods.end_shift.Opts
 ---@field end_shift_ptn? string luapat to determine if a by-one shift in position should be done
+---@field shift_point_range? boolean shift also the start of a single-char-wide range
 --- How to manipulate the matching end
 --- - 1 to add the matching end, -1 to exclude it from the range (default)
 --- - `'insert'`: -1 if matching, and on top always add 1 if we're in insert/select mode
@@ -88,18 +115,20 @@ do -- end_shift with adjustment for insert mode
 
 	--- Shift the end by -1 if EOL is selected or the char falls under `opts.endfix`.
 	--- Shifts the whole region if it was just 1 char wide.
+	---@param self anyrange
 	---@param opts? manipulator.range_mods.end_shift.Opts
-	---@return Range4 point returns `Range2` if `self` was `Range2`
+	---@return manipulator.Range point returns `Range2` if `self` was `Range2`
 	function M.end_shift(self, opts)
 		opts = opts or {}
-		local buf, r = RANGE_U.decompose(self)
+		local r = Range.new(self)
 
-		local line, col = r[3] or r[1], (r[4] or r[2]) + (opts.shift_mode == 1 and 1 or -1)
-		local char = vim.api.nvim_buf_get_lines(buf, line, line + 1, true)[1]:sub(col + 1, col + 1)
+		local col = r[4] + (opts.shift_mode == 1 and 1 or -1)
+		local char = r:end_():get_line():sub(col + 1, col + 1)
 
 		col = char:match(opts.end_shift_ptn or '^[, ]?$') and (opts.shift_mode == 1 and 1 or -1) or 0
 		if opts.shift_mode == 'insert' and insert_modes[vim.fn.mode()] then col = col + 1 end
 
+		if opts.shift_point_range and r[1] == r[3] and r[4] <= r[2] then r[2] = r[2] + col end
 		r[4] = r[4] + col
 		return r
 	end
@@ -109,34 +138,45 @@ end
 ---@param opts manipulator.TS.Config
 function M.with_docs(self, opts)
 	-- doesn't get launched on Nil, but we still must check the opts
-	if self:is_valid_in(opts) ~= true then return self:range0() end
-	---@diagnostic disable-next-line: invisible
-	self.config = opts
+	local lw_opts = { linewise = 'auto' }
+	-- ensure we're the type that could carry docs and that we don't share the line with other nodes
+	if not self:is_valid_in(opts) or not M.evaluate_linewise(self, lw_opts) then return self.range end
 
-	local function extend_dir(dir)
-		local met = dir == 'prev' and self.prev_sibling or self.next_sibling
-		local i = dir == 'prev' and 1 or -1
-		local old, new = self, met(self)
-		while new and new.node and new:range0()[2 + i] + i == old:range0()[2 - i] do
-			old = new
-			new = met(new)
-		end
+	local prev_opts = self:action_opts('with_docs', 'prev_sibling')
+	prev_opts.inherit = false
 
-		return old:range0()
+	-- NOTE: not testing for a TS.Nil node, because we disabled `nil_wrap` in the preset config
+	local old, new = self, self:prev_sibling 'with_docs'
+	-- include all comments above
+	while new and new.range[3] + 1 == old.range[1] and M.evaluate_linewise(new, lw_opts) do
+		old = new
+		new = new:prev_sibling 'with_docs'
 	end
 
-	local s = extend_dir 'prev'
-	local e
-	local prev_opts = self:action_opts(nil, 'prev_sibling')
-	if prev_opts.types[self.node:type()] then
-		e = extend_dir 'next' -- if we could get up to this type of node, try also down to the other
-	else
-		e = self:range0()
-		-- include previous line only if we found some other nodes, too
-		if s[1] < e[1] and self.get_lines({ s[1] - 1, 0, s[1] - 1, vim.v.maxcol }, false)[1] == '' then
-			s[1] = s[1] - 1
-			s[2] = 0
+	local s, e = old.range, self.range
+	if prev_opts.types[self.node:type()] then -- if we are the comment to which we'd expand
+		old, new = self, self:next_sibling 'with_docs'
+		-- include all comments bellow
+		while new and new.range[1] - 1 == old.range[3] and M.evaluate_linewise(new, lw_opts) do
+			old = new
+			new = new:next_sibling(prev_opts) -- also allow only docs
 		end
+
+		new = old:next_sibling 'with_docs' -- uses with_docs.types (all the ones we can process)
+		-- include the node that is being documented
+		if new and new.range[1] - 1 == old.range[3] and M.evaluate_linewise(new, lw_opts) then
+			e = new.range
+		elseif s ~= self.range or old ~= self then -- or select just the block of comments
+			e = old.range
+		else -- or recognize we didn't actually want to select the whole block -> revert
+			return self.range
+		end
+	end
+
+	-- include previous line only if we found some other nodes, too
+	if s[1] < e[1] and Range.get_line { s[1] - 1, 0, buf = self.buf } == '' then
+		s[1] = s[1] - 1
+		s[2] = 0
 	end
 
 	return { s[1], s[2], e[3], e[4] }

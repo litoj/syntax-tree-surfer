@@ -2,9 +2,9 @@
 
 local Region = require 'manipulator.region'
 local U = require 'manipulator.utils'
-local RANGE_U = require 'manipulator.range_utils'
+local Range = require 'manipulator.range'
 local TS_U = require 'manipulator.ts_utils'
-local NVIM_TS_U = require 'nvim-treesitter.ts_utils'
+local MODS = require 'manipulator.range_mods'
 local Batch = require 'manipulator.batch'
 
 ---@class manipulator.TS: manipulator.Region
@@ -31,10 +31,7 @@ TS.__index = TS
 ---@field prev? manipulator.TS.GraphOpts
 ---@field presets? {[string]:manipulator.TS.Config}
 
-TS.opt_inheritance = U.tbl_inner_extend('keep', Region.opt_inheritance, {
-	types = false,
-	langs = false,
-
+TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 	parent = true,
 	child = true,
 	sibling = true,
@@ -43,6 +40,10 @@ TS.opt_inheritance = U.tbl_inner_extend('keep', Region.opt_inheritance, {
 	in_graph = 'sibling',
 	next = 'in_graph',
 	prev = 'in_graph',
+
+	get = true,
+	get_all = true,
+	current = true,
 })
 
 ---@class manipulator.TS.module: manipulator.TS
@@ -62,12 +63,13 @@ end
 ---   - getting the node (`.current()`, `.get_all()`, `.get()`) will be done with default config
 --- - `'ltree_or_buf`: best of both worlds - prefer ltree, use buf when ltree is not known yet
 ---@field ft_preset_source? false|'buf'|'ltree'|'ltree_or_buf'
----@field get? manipulator.TS.module.get.Opts
----@field get_all? manipulator.TS.module.get.Opts
+---@field get_all? manipulator.TS.Opts
 ---@field current? manipulator.TS.module.current.Opts
 
 ---@type manipulator.TS.module.Config
 M.default_config = {
+	inherit = false,
+
 	langs = { ['*'] = true, 'luap', 'printf', 'regex' },
 	types = {
 		['*'] = true,
@@ -75,6 +77,8 @@ M.default_config = {
 		'string_content',
 		'comment_content',
 
+		-- C/C++
+		'compound_statement',
 		-- Lua
 		'block',
 		-- 'dot_index_expression', -- = field paths
@@ -82,48 +86,43 @@ M.default_config = {
 		'arguments',
 		'parameters',
 	},
+	nil_wrap = true,
 
 	sibling = { types = { inherit = true, comment = false } },
-	next = { allow_child = true, start_point = 'cursor' },
+	next = { allow_child = true, start_point = '.' },
 	prev = {},
 
 	current = { linewise = false, on_partial = 'larger' },
 
-	nil_wrap = true,
-	inherit = false,
 	ft_preset_source = 'ltree_or_buf',
 
 	presets = {
-		-- ### General use presets
+		-- ### General-use presets
 		path = { -- configured for selecting individual fields in a path to an attribute (A.b.c.d=2)
 			in_graph = { max_link_dst = 4, max_ascend = 3, max_descend = 1, langs = { inherit = true, luadoc = false } },
 			next = { allow_child = false },
 			prev = { compare_end = true },
 		},
 
-		with_docs = {
+		with_docs = { -- select the node under cursor and all documentation associated with it
+			nil_wrap = false,
+
+			types = { 'definition$', 'declaration$', '.*comment.*', '.*asignment.*' },
 			select = { -- what can we apply the mod to
-				rangemod = require('manipulator.range_mods').with_docs,
-				langs = { inherit = true, '.*doc.*' },
-				types = { '.*definition', '.*declaration', '.*comment.*', '.*asignment.*' },
+				rangemod = MODS.with_docs,
+				langs = { inherit = true, matchers = { ['.*doc.*'] = false } },
 			},
-			sibling = {
-				langs = false,
-				types = { '.*comment.*' },
-			},
-			-- field is required for with_docs rangemod to decide (caches the user opts)
-			prev_sibling = { -- what preceeding nodes can join the selection (docs/comments)
-			},
-			next_sibling = { -- when selecting docs/comments, what can follow and join
-			},
+			-- which preceeding nodes can join the selection (docs/comments)
+			prev_sibling = { langs = false, types = { '.*comment.*' } },
+			next_sibling = { types = { inherit = 'self' } }, -- do not inherit default (=sibling.types)
 		},
 
 		-- ### FileType presets
-		-- **always inherit from 'ft_base'** (dynamic preset set to current node config or default)
+		-- **always inherit from 'ft_base'** (gets set to the original 'super' we are replacing)
 		markdown = {
 			inherit = 'ft_base',
 			types = {
-				inherit = 'ft_base',
+				inherit = true, -- `true` always means _inherit from what parent table inherits (→ft_base)_
 				'list_marker_minus',
 				'inline',
 				'block_continuation',
@@ -134,7 +133,7 @@ M.default_config = {
 		tex = {
 			inherit = 'ft_base',
 			types = {
-				inherit = 'ft_base',
+				inherit = true,
 				'word',
 				'text',
 			},
@@ -143,9 +142,9 @@ M.default_config = {
 		lua = {
 			inherit = 'ft_base',
 			types = {
-				inherit = 'ft_base',
+				inherit = true,
 				'documentation',
-				'diagnostic_annotation',
+				'_annotation$',
 				'chunk',
 				'variable_list',
 				'expression_list',
@@ -160,25 +159,32 @@ M.config.presets.active = M.config
 
 ---@param config manipulator.TS.module.Config
 function M.setup(config)
-	M.config = U.module_setup(M.config.presets, M.default_config, config, TS.opt_inheritance)
+	M.config = U.module_setup(M.config.presets, M.default_config, config, TS.action_map)
 	-- NOTE: cannot activate enablers right away because they might not have the '*' set due to inheritance
 	-- region actions on TSs will look for its defaults here -> copy the defaults
-	U.tbl_inner_extend('keep', M.config, Region.config, 2)
+	U.tbl_inner_extend('keep', M.config, Region.config, 2, 'noref')
 	return M
 end
 
--- returned config may need expanding before standalone use
+--- Get a config specific for the current filetype (ltree-/buffer-based)
+--- Returned config may need expanding before standalone use.
 ---@param buf? integer
 ---@param ltree? vim.treesitter.LanguageTree
+---@return manipulator.TS.Config?
 local function get_ft_config(buf, ltree)
-	-- could it be from buffer? Y-> are we missing ltree or is it just from buffer? Y-> return buffer
-	local bp = M.config.ft_preset_source
-		and M.config.presets[M.config.ft_preset_source ~= 'ltree' and ((not ltree or M.config.ft_preset_source == 'buf') and vim.bo[buf or 0].ft) or (ltree and ltree:lang())]
-	if bp then bp.presets = M.config.presets end
-	return bp
+	-- ltree_or_buffer? Y-> is there a preset for ltree? N-> return buffer
+	local bp = M.config.ft_preset_source ---@type string|manipulator.TS.Config
+	if bp then
+		if bp ~= 'buf' and ltree then bp = U.get_or(M.config.presets[ltree:lang()], bp) end
+		if type(bp) == 'string' and bp ~= 'ltree' then bp = M.config.presets[vim.bo[buf or 0].ft] end
+	end
+	if type(bp) == 'table' then
+		bp.presets = M.config.presets
+		return bp
+	end
 end
 
-M.debug = false ---@type false|vim.log.levels
+M.debug = nil ---@type vim.log.levels?
 
 ---@override
 ---@generic O: manipulator.TS.Opts
@@ -193,12 +199,12 @@ function TS:action_opts(opts, action)
 	end
 
 	M.config.presets.ft_base = self.config or M.config
-	opts = M.activate_enablers(U.get_opts_for_action(
+	opts = M.activate_enablers(U.expand_action(
 		---@diagnostic disable-next-line: undefined-field
 		get_ft_config(opts and opts.buf or self.buf, self.ltree) or M.config.presets.ft_base,
 		opts,
 		action,
-		self.opt_inheritance
+		self.action_map
 	))
 
 	-- ensure it doesn't get inherited, but stays in the user opts in case he reuses them
@@ -207,11 +213,26 @@ function TS:action_opts(opts, action)
 	if M.debug then
 		local presets = opts.presets
 		opts.presets = nil
-		vim.notify(vim.inspect { action = action, opts = opts }, M.debug)
+		if package.loaded['reform'] then
+			print({ [action or 'config'] = opts }, 3, M.debug)
+		else
+			vim.notify(vim.inspect { action = action, opts = opts }, M.debug)
+		end
 		opts.presets = presets
 	end
 
 	return opts
+end
+
+local function range_fix(node, buf)
+	local r = { node:range() }
+	if r[4] == 0 then
+		r[3] = r[3] - 1
+		r[4] = #vim.api.nvim_buf_get_lines(buf, r[3], r[3] + 1, true)[1] - 1
+	else
+		r[4] = r[4] - 1
+	end
+	return r
 end
 
 --- Create a new language-tree node wrapper.
@@ -225,6 +246,7 @@ function TS:new(node, ltree, opts)
 
 	return TS.super.new(self, {
 		buf = ltree._source,
+		range = range_fix(node, ltree._source),
 		node = node,
 		ltree = ltree,
 		config = self.config or M.config,
@@ -242,10 +264,6 @@ function TS:with(config) return self:new(self.node, self.ltree, self:action_opts
 function TS:is_valid_in(opts)
 	return opts.types[self.node:type()] and (type(opts.langs) ~= 'table' or opts.langs[self.ltree:lang()])
 end
-
-function TS:range1() return { NVIM_TS_U.get_vim_range({ self.node:range() }, self.buf) } end
-
-function TS:start() return { self.node:start() } end
 
 ---@override
 function TS:__tostring()
@@ -273,7 +291,7 @@ end
 function TS:child(opts, idx)
 	opts = self:action_opts(opts, 'child')
 	if not idx or idx == 'closer_edge' then
-		idx = RANGE_U.point_to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
+		idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
 	end
 
 	local node, ltree = TS_U.get_child(opts, self.node, self.ltree, idx)
@@ -348,23 +366,19 @@ do -- ### Wrapper for nil TSNode matches
 	function TS.Nil:is_valid_in() return false end
 end
 
----@class manipulator.TS.module.get.Opts: manipulator.TS.Opts irl inherits the whole config
----@field buf? integer Buffer number (default: 0)
----@field range Range4 0-indexed range: {start_row, start_col, end_row, end_col}
----@field persistent? boolean should opts be saved as the default for the node (default: false)
-
 --- Get all matching nodes spanning the entire buffer.
----@param opts manipulator.TS.module.get.Opts|{range?:nil} GetOpts, but range is ignored
+---@param opts manipulator.TS.Opts
+---@param from_range? anyrange where should the nodes come from (whole buffer by default)
 ---@return manipulator.Batch
-function M.get_all(opts)
+function M.get_all(opts, from_range)
 	opts = M:action_opts(opts, 'get_all')
 
-	local ltree = vim.treesitter.get_parser(opts.buf or 0)
-	opts.buf = nil
+	local r = from_range and Range.get_or_make(from_range)
+	local ltree = vim.treesitter.get_parser(r and r.buf or 0)
 	if not ltree then return Batch:new({}, TS.Nil, TS.Nil) end
 
 	local types = opts.types
-	assert(types)
+	assert(types, 'TS.config.types must be always set')
 	local nodes = {} ---@type manipulator.TS[]
 	ltree:for_each_tree(function(tree, lt)
 		if lt ~= ltree or not opts.langs or not opts.langs[ltree:lang()] then return end
@@ -382,8 +396,8 @@ function M.get_all(opts)
 			if node and types[node:type()] then
 				local ts = TS:new(node, ltree, opts)
 				-- ensure different ranges from the previous node (in parent->child relations)
-				if ts and ts.node and #nodes == 0 or ts.node ~= nodes[#nodes].node then
-					nodes[#nodes + 1] = opts.persistent and ts:with(opts) or ts
+				if ts and ts.node and (#nodes == 0 or ts.node ~= nodes[#nodes].node) and (not r or r:contains(ts)) then
+					nodes[#nodes + 1] = ts
 				end
 			end
 		end
@@ -393,53 +407,47 @@ function M.get_all(opts)
 end
 
 --- Get a node covering given range.
----@param opts manipulator.TS.module.get.Opts
+---@param range anypos range that the result node must include
+---@param opts manipulator.TS.Opts
 ---@return manipulator.TS?
-function M.get(opts)
+function M.get(range, opts)
 	opts = M:action_opts(opts, 'get')
+	local r = Range.get_or_make(range)
 
-	local ltree = vim.treesitter.get_parser(opts.buf or 0)
+	local ltree = vim.treesitter.get_parser(r.buf)
 	if not ltree then return TS:new(nil, nil, opts) end
 
-	opts.range[4] = opts.range[4] + 1
-	if opts.langs then ltree = ltree:language_for_range(opts.range) end
+	r[4] = r[4] + 1 -- NOTE: TSNode:range() is end exclusive
+	if opts.langs then ltree = ltree:language_for_range(r) end
 
-	local ret = TS:new(ltree:named_node_for_range(opts.range), ltree, opts)
-	opts.range[4] = opts.range[4] - 1
-	return ret and opts.persistent and ret:with(opts) or ret
+	local ret = TS:new(ltree:named_node_for_range(r), ltree, opts)
+	return ret
 end
 
----@class manipulator.TS.module.current.Opts: manipulator.TS.module.get.Opts,manipulator.Region.module.current.Opts
+---@class manipulator.TS.module.current.Opts: manipulator.TS.Opts,manipulator.Region.module.current.Opts
 --- When node is larger than visual selection, what node should we return (default: '.')
 ---@field on_partial? 'larger'|pos_expr|false
----@field range? Range4 this is for get() call, prefer using `fallback` for a specific range
 
 ---@param opts? manipulator.TS.module.current.Opts persistent by default
 ---@return manipulator.TS?
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
-	local r, visual = Region.current(opts)
-	opts.range = r:range0()
-	local ts = M.get(opts) -- get the primary chosen node
+	local reg, visual = Region.current(opts)
+	local ts = M.get(reg, opts) -- get the primary chosen node
 
 	-- if selection is smaller than the chosen node decide what to do
-	if
-		(ts and ts.node and visual and opts.on_partial ~= 'larger')
-		and RANGE_U.rangeContains(ts:range0(), opts.range) > 0
-	then
+	if (ts and ts.node and visual and opts.on_partial ~= 'larger') and ts.range ~= reg.range then
 		if opts.on_partial == false then return TS:new(nil, nil, opts) end
 
-		local bufrange =
-			Region.current(U.tbl_inner_extend('keep', { src = opts.on_partial or '.', fallback = false }, opts))
-		opts.range = bufrange.range
-		opts.buf = bufrange.buf
-		ts = M.get(opts)
+		ts = M.get(
+			Region.current(U.tbl_inner_extend('keep', {
+				src = opts.on_partial or '.',
+				fallback = false,
+			}, opts)),
+			opts
+		)
 	end
-
-	opts.buf = nil
-	opts.range = nil
-
 	return ts
 end
 

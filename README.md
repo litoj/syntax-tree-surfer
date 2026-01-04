@@ -7,6 +7,7 @@
   - position sources: cursor, visual, mouse (move via `vim.g.mousemoveevent`), operator
 - `TSRegion`: treesitter full traversal including injected languages
   - filtering by node type & lang
+  - selection possible with dynamic modifiers -> select fn with docs etc.
 - `CallPath`: flexible & reusable keymapping function builder
 - vim motion support (`5j`…) (via `CallPath:with_count`)
 - dot repeat + operator mode (via `CallPath:as_op`)
@@ -23,8 +24,6 @@
   - chapter about how to actually create mappings / module layout and meaning / design
 - add info/gtdefinition for types in info windows - _belongs to reform.nvim_
 - matching by query syntax and catching into groups
-- add selection modification/filter (include trailing comma etc.)
-  - possible, but currently no predefined list of filters, could use presets to add them
 - examples of operators (snf = select next function, gnn = jump next node)...
   - either callpath extension or type presets (f/a/s/c/l…) for the letters
 - refactor swap to allow swapping parent and child (i.e. conditionals)

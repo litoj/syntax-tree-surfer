@@ -86,7 +86,9 @@ M.default_config = {
 		allow_field_access = false,
 		skip_anchors = true,
 	},
-	as_op = { keep_visual = false, return_expr = false },
+	as_op = { except = false, return_expr = false },
+
+	inherit = false,
 }
 
 ---@type manipulator.CallPath.Config
@@ -123,7 +125,7 @@ function CallPath:new(item, config)
 		self.path and self or { config = M.config, idx = 0 },
 		1
 	)
-	self.item = item or self.item
+	self.item = item or self.item or false -- don't ever allow it to be nil (will break normal access)
 
 	return setmetatable(self, CallPath)
 end
@@ -245,10 +247,13 @@ function CallPath:with_count(target, on_fail)
 end
 
 ---@class manipulator.CallPath.as_op.Opts
----@field keep_visual? boolean should visual mode be run normally, or as an operator (which would cause an exit from visual mode)
----@field return_expr? boolean if we should return the 'g@' or will this be mapped without `{expr=true}` (adapted for insert mode either way)
----@field dot_repeat_only? boolean if the purpose is only for a dot-repeatable mapping (-> self-initiate) or an actual operator
---- - invokes itself to
+--- Which modes should run normally and not as an operator (to keep visual selection)
+---@field except? false|manipulator.VisualModeEnabler|'visual'
+--- Should we return the 'g@' or will this be mapped without `{expr=true}` (both work in insert)
+---@field return_expr? boolean
+--- Is the purpose only for a dot-repeatable mapping (-> self-initiate) or an actual operator
+--- _Note: will act as a normal mapping when in visual mode!_
+---@field dot_repeat_only? boolean
 
 --- Create a keybind-ready function that acts as an operator executing the constructed path.
 --- Options improve the handling in visual modes and better UX during mapping. Works in insert mode.
@@ -258,37 +263,36 @@ function CallPath:as_op(opts)
 	opts = self:action_opts(opts, 'as_op')
 
 	return function()
-		local mode = vim.fn.mode()
-		local keys
-		if mode == 'v' or mode == 'V' or mode == '\022' then
-			if opts.keep_visual then return self:exec() end
+		if opts.except and U.validate_mode(opts.except) or opts.dot_repeat_only then return self:exec() end
 
-			keys = 'g@'
+		local keys = vim.fn.mode() == 'i' and '\015g@' or 'g@'
+		if opts.dot_repeat_only then -- special handling to retain `vim.v.count1` value
+			M.opfunc = function() self:exec() end
+			keys = keys .. tostring(vim.v.count1) .. 'j'
 		else
-			keys = opts.dot_repeat_only and 'g@l' or 'g@'
+			M.opfunc = function(opmode)
+				vim.g.manip_opmode = opmode
+				self:exec()
+				vim.g.manip_opmode = nil
+			end
 		end
+		vim.go.opfunc = [[v:lua.require'manipulator.call_path'.opfunc]]
 
-		M.opfunc = function(opmode)
-			if keys == 'g@' then vim.g.manip_opmode = opmode end
-			self:exec()
-			vim.g.manip_opmode = nil
-		end
-		vim.go.operatorfunc = [[v:lua.require'manipulator.call_path'.opfunc]]
-
-		if mode == 'i' then keys = '\015' .. keys end -- <C-o>
 		if opts.return_expr then return keys end
 		vim.api.nvim_feedkeys(keys, 'n', false)
 	end
 end
 
 ---@class manipulator.CallPath.exec.Opts
----@field allow_shorter_motion? boolean should we use the last valid motion iteration or produce an error when the motion cannot be repeated anymore (reached end of document)
----@field allow_direct_calls? boolean should arguments for direct calls on the wrapped object be executed or produce an error
----@field allow_field_access? boolean should paths that don't lead to a function be considered a simple field access
----@field skip_anchors? boolean should any anchored path be skipped or produce an error
----@field src? # modifications to the object to run the path on (default: self.item)
----| 'update' # the result should replace the object, reseting the path to {}
----| table # run the path on the given object
+--- Should we use the last value of the repeated motion when bellow vim.v.count1
+---@field allow_shorter_motion? boolean
+--- Should arguments for direct calls on the wrapped object be executed or produce an error
+---@field allow_direct_calls? boolean
+--- Should paths that don't lead to a function be considered a simple field access
+---@field allow_field_access? boolean
+---@field skip_anchors? boolean Should any anchored path be skipped or produce an error
+--- Object to run the path on (default: self.item), use `'update'` to update the path item
+---@field src? 'update'|table
 
 ---@param opts? manipulator.CallPath.exec.Opts
 ---@return any
@@ -337,17 +341,15 @@ function CallPath:_exec(opts)
 				if call.args or call.as_motion or not opts.allow_field_access then
 					error('CallPath item field ' .. call.fn .. ' is not callable: ' .. tostring(self))
 				else
-					item = fn
+					item = fn -- not a fn - just a field of `item`
 				end
-			elseif not call.args and not call.as_motion then -- ### method without args
-				item = fn(item)
-			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call
+			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call - most common
 				item = fn(item, unpack(call.args or {}))
 			else -- ### vim motion - run for multiple iterations
 				local batch = Batch.from_recursive(
 					item,
 					vim.v.count1,
-					function(item)
+					function(item) -- always query the fn so that item metatable can change the impl
 						return (type(call.fn) == 'function' and call.fn or item[call.fn])(item, unpack(call.args or {}))
 					end
 				)

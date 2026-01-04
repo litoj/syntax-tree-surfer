@@ -1,6 +1,5 @@
 ---@diagnostic disable: invisible
 local U = require 'manipulator.utils'
-local RANGE_U = require 'manipulator.range_utils'
 
 ---@class manipulator.Batch
 ---@field items manipulator.Region[]
@@ -16,7 +15,7 @@ Batch.__index = Batch
 ---@field pick? manipulator.Batch.pick.Opts
 ---@field presets? { [string]: manipulator.Batch.Config }
 
-Batch.opt_inheritance = { pick = true }
+Batch.opt_inheritance = { pick = 'super' }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
@@ -216,7 +215,7 @@ end
 ---@param opts? manipulator.Batch.pick.Opts can include all `fzf-lua.config.Base` opts
 ---@return manipulator.Region|manipulator.Batch?
 function Batch:pick(opts)
-	opts = U.get_opts_for_action(self.config, opts, 'pick', Batch.opt_inheritance)
+	opts = U.expand_action(self.config, opts, 'pick', Batch.opt_inheritance)
 
 	local co
 	local callback = opts.callback
@@ -229,13 +228,11 @@ function Batch:pick(opts)
 	end
 
 	if callback == true then
-		-- TODO: test this `true` turning it into a call_path plan
-		-- pretend we already have the return value
-		pick = require('manipulator.call_path'):new { immutable = false, exec_on_call = false }
+		pick = require('manipulator.call_path'):new(nil, { immutable = false, exec_on_call = false })
 		callback = function(result)
 			pick.item = result
-			pick.config.exec_on_call = 10 -- in case the full path hasn't been constructed yet (unlikely)
 			pick:exec { src = 'update' } -- run the planned execution
+			pick.config.exec_on_call = 10 -- in case the full path hasn't been constructed yet (unlikely)
 		end
 	elseif not callback then
 		co = coroutine.running()
@@ -265,16 +262,19 @@ function Batch:pick(opts)
 			resolve(mapped)
 		end
 
+		local Pos = require 'manipulator.pos'
+
 		-- Build entries with location information for preview.
 		-- Use make_entry.lcol directly so fzf-lua's builtin previewer can jump to file:line:col.
 		local entries = { [#self.items] = '' }
 		local make_entry = require 'fzf-lua.make_entry'
-		local bufs = { [#self.items] = 1 } ---@cast bufs {}
+		local bufs = { [#self.items] = 1 } ---@cast bufs (integer|{})[]
 		for i, item in ipairs(self.items) do
 			local display = opts.format_item(item)
-			local buf, range = RANGE_U.decompose(item, false)
+			local buf = item.buf or 0
 			if not bufs[-buf] then bufs[-buf] = { bufnr = buf, path = vim.api.nvim_buf_get_name(buf) } end
-			bufs[i] = buf or 0
+			bufs[i] = buf
+			local range = Pos.raw(item)
 			if range and range[2] then
 				display = make_entry.lcol({ ---@type string
 					filename = tostring(buf), -- pretend to be a filename to save on search space
