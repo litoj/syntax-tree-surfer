@@ -267,7 +267,8 @@ function CallPath:as_op(opts)
 	return function()
 		if opts.except and U.validate_mode(opts.except) then return self:exec() end
 
-		local keys = vim.fn.mode() == 'i' and '\015g@' or 'g@'
+		-- if self-actuating, then <C-o> mode will be finished -> check for temporary normal mode
+		local keys = vim.fn.mode(not opts.return_expr):match 'i' and '\015g@' or 'g@'
 		if opts.dot_repeat_only then -- special handling to retain `vim.v.count1` value
 			M.opfunc = function() self:exec() end
 			keys = keys .. tostring(vim.v.count1) .. 'j'
@@ -348,13 +349,9 @@ function CallPath:_exec(opts)
 			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call - most common
 				item = fn(item, unpack(call.args or {}))
 			else -- ### vim motion - run for multiple iterations
-				local batch = require('manipulator.batch').from_recursive(
-					item,
-					vim.v.count1,
-					function(item) -- always query the fn so that item metatable can change the impl
-						return (type(call.fn) == 'function' and call.fn or item[call.fn])(item, unpack(call.args or {}))
-					end
-				)
+				local Batch = require 'manipulator.batch'
+				local batch =
+					Batch.from_recursive(item, vim.v.count1, Batch.action_to_fn(call.fn, unpack(call.args or {})))
 
 				local len = batch:length()
 				if len == vim.v.count1 then

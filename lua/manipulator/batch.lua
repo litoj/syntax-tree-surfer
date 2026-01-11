@@ -102,21 +102,26 @@ function Batch:at(index) return self.items[index > 0 and index or #self.items + 
 ---@return integer
 function Batch:length() return #self.items end
 
----@alias manipulator.Batch.Action (fun(item:manipulator.Region):manipulator.Region?)|manipulator.CallPath|string|string[]
+---@alias manipulator.Batch.Action (fun(item:manipulator.Region,...):manipulator.Region?)|manipulator.CallPath|string
 
 ---@param action manipulator.Batch.Action
 ---@return fun(item):unknown
-function M.action_to_fn(action)
-	return type(action) == 'function' and action
-		or action.path and function(x) return action:exec { src = x } end -- manipulator.CallPath
-		or (not action[1] and function(x) return x[action](x) end) -- string
-		or function(x) -- string[]
-			for _, a in ipairs(action) do
-				x = x[a](x)
-			end
-
-			return x
+function M.action_to_fn(action, ...)
+	local args = { ... }
+	if type(action) == 'function' then
+		if #args > 0 then
+			return function(x) return action(x, unpack(args)) end
+		else
+			return action
 		end
+	end
+
+	if action.path then -- manipulator.CallPath
+		if #args > 0 then action = action(...) end
+		return function(x) return action:exec { src = x } end
+	end
+
+	return function(x) return x[action](x, unpack(args)) end -- string
 end
 
 ---@param action manipulator.Batch.Action

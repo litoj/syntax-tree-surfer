@@ -313,8 +313,11 @@ function Region:jump(opts)
 end
 
 ---@class manipulator.Region.select.Opts: manipulator.Region.jump.Opts,manipulator.range_mods.linewise.Opts
----@field insert? boolean if coming from insert mode should we return to it after ending the selection (like `<C-o>v`) (default: false)
----@field allow_select_mode? boolean if coming from insert mode should we enter select or visual mode. Cannot be combined with `insert` (default: false=visual mode only)
+--- If coming from insert mode:
+--- - `temporary-visual`: return to insert mode after the selection is finished
+--- - `visual`: exit insert mode and start a normal visual selection (default)
+--- - `select`: enter select mode
+---@field from_insert? 'temporary-visual'|'visual'|'select'
 
 --- Select node in visual/select mode.
 ---@param opts? manipulator.Region.select.Opts
@@ -329,9 +332,9 @@ function Region:select(opts)
 	local text_mode = MODS.evaluate_linewise(r, opts) and 'V' or 'v'
 	if c_mode ~= text_mode then
 		if c_mode == 'i' then
-			if opts.insert then -- use <C-o> to temporarily leave insert
+			if opts.from_insert == 'temporary-visual' then
 				vim.cmd.normal { bang = true, args = { '\015' } }
-			elseif not opts.allow_select_mode then
+			elseif opts.from_insert ~= 'select' then
 				vim.cmd.stopinsert()
 			end
 			r[4] = r[4] + 1

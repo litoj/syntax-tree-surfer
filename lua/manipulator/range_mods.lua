@@ -184,9 +184,9 @@ end
 
 ---@param self manipulator.TS
 ---@return manipulator.TS
-function M.until_new_pos(self, action, end_)
+function M.until_new_pos(self, action, end_, ...)
 	if not self.buf then return self end
-	action = require('manipulator.batch').action_to_fn(action)
+	action = require('manipulator.batch').action_to_fn(action, ...)
 	local getCmp = self.range[end_ and 'end_' or 'start']
 	local pos = getCmp(self.range, true)
 	while self.buf and getCmp(self.range, true) == pos do
