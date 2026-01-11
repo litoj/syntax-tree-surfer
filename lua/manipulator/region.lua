@@ -299,7 +299,7 @@ end
 ---@field end_? boolean jump to the end? (or start of the range - default)
 
 --- Jump to the start (or end, if `opts.end_`) of the region.
----@param opts? manipulator.Region.jump.Opts opts and modifications of the jump location
+---@param opts? manipulator.Region.jump.Opts|string opts and modifications of the jump location
 function Region:jump(opts)
 	opts = self:action_opts(opts, 'jump')
 
@@ -320,7 +320,7 @@ end
 ---@field from_insert? 'temporary-visual'|'visual'|'select'
 
 --- Select node in visual/select mode.
----@param opts? manipulator.Region.select.Opts
+---@param opts? manipulator.Region.select.Opts|string
 function Region:select(opts)
 	opts = self:action_opts(opts, 'select')
 
@@ -358,7 +358,7 @@ end
 ---@field linewise? boolean
 
 --- Paste like with visual mode motions - prefer using vim motions
----@param opts manipulator.Region.paste.Opts
+---@param opts manipulator.Region.paste.Opts|string
 ---@return manipulator.Region # region of the pasted text
 function Region:paste(opts)
 	opts = self:action_opts(opts, 'paste')
@@ -494,7 +494,7 @@ do
 	---@field run_on_queued? boolean should the action be run on the queued node or on the pairing one
 
 	--- Move the node to a given position
-	---@param opts? manipulator.Region.queue_or_swap.Opts included action options used only on run call
+	---@param opts? manipulator.Region.queue_or_swap.Opts|string included action options used only on run call
 	---@return manipulator.Region self returns itself if it was the first to be selected; Region.Nil, if selection was removed
 	function Region:queue_or_swap(opts)
 		opts = self:action_opts(opts, 'queue_or_run')

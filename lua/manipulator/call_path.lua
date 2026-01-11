@@ -11,8 +11,9 @@ local U = require 'manipulator.utils'
 ---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
----@class manipulator.CallPath<O>: {item: O, [any]:manipulator.CallPath<O>|O}
----@operator call(...):manipulator.CallPath
+---@class manipulator.CallPath
+---@field [any] self|fun(...):self
+---@field protected item any
 ---@field protected config manipulator.CallPath.Config
 ---@field protected path manipulator.CallPath.CallInfo[]
 ---@field protected idx integer at which index do we write the path
@@ -22,10 +23,12 @@ local U = require 'manipulator.utils'
 ---@field dot_fn function shortcut for `self:as_op({dot_repeat_only=true})`
 local CallPath = {}
 
----@overload fun(...):manipulator.TS
----@class manipulator.CallPath.TS: manipulator.CallPath,manipulator.TS,{[string]:manipulator.CallPath.TS|fun(...):manipulator.CallPath.TS}
----@overload fun(...):manipulator.Region
----@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region,{[string]:manipulator.CallPath.Region|fun(...):manipulator.CallPath.Region}
+--- Necessary reduntant annotations, because lua_ls doesn't work with generics properly
+
+---@class manipulator.CallPath.TS: manipulator.CallPath,manipulator.TS
+---@field [any] self|fun(...):self
+---@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region
+---@field [any] self|fun(...):self
 
 local method_to_fn_call = {} -- wrap to ensure the first callpath call on a module is static (no self)
 function method_to_fn_call:__index(key)
@@ -40,10 +43,7 @@ end
 
 local function wrap_mod(mod)
 	if not rawget(method_to_fn_call, mod) then
-		method_to_fn_call[mod] = setmetatable(
-			{ item = require('manipulator.' .. mod) or error('invalid manipulator module name: ' .. mod) },
-			method_to_fn_call
-		)
+		method_to_fn_call[mod] = setmetatable({ item = require('manipulator.' .. mod) }, method_to_fn_call)
 	end
 
 	return CallPath:new(method_to_fn_call[mod])
@@ -56,10 +56,10 @@ end
 --- Calling the build path:
 --- - for keymappings pass in the `.fn` field,
 --- - for direct evaluation call `:exec()`/`.fn()` manually
----@overload fun(o?:manipulator.CallPath.Config):manipulator.CallPath for generic executor builds
+---@overload fun(item?:any,o?:manipulator.CallPath.Config):manipulator.CallPath for generic executor builds
 ---@class manipulator.CallPath.module: manipulator.CallPath
----@field ts manipulator.CallPath.TS|fun(opts:manipulator.TS.module.current.Opts):manipulator.CallPath.TS
----@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
+---@field ts manipulator.CallPath.TS|manipulator.TS.module
+---@field region manipulator.CallPath.Region|manipulator.Region.module
 ---@field class manipulator.CallPath
 local M = U.get_static(CallPath, {
 	__index = function(_, key) return wrap_mod(key) end,
