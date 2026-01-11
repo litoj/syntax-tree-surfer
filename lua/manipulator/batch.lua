@@ -15,7 +15,7 @@ Batch.__index = Batch
 ---@field pick? manipulator.Batch.pick.Opts
 ---@field presets? { [string]: manipulator.Batch.Config }
 
-Batch.opt_inheritance = { pick = 'super' }
+Batch.opt_inheritance = { pick = true }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
@@ -199,27 +199,35 @@ function Batch:to_qf(mode)
 	return self
 end
 
----@class manipulator.Batch.pick.Opts
----@field callback? fun(result:manipulator.Region|manipulator.Batch?)|boolean what to do after the value has been picked, `true` to convert the return value callers to an execution plan, `false` to return value via currently active coroutine
+---@class manipulator.Batch.pick.Opts: manipulator.Batch.Opts
+--- What to do after the value has been picked
+--- - `true` to convert the return value callers to an execution plan
+--- - `false` to return value via currently active coroutine
+---@field callback? fun(result:manipulator.Region|manipulator.Batch?)|boolean
+---@field pos_getter? fun(item:any):manipulator.Pos how to get the location of the item preview (default:)
 ---@field format_item? fun(item:any):string how to display the item (default: tostring(V))
 ---@field picker? 'native'|'fzf-lua' (default: 'native')
 ---@field prompt? string
+---@field prompt_postfix? string (default: ': ')
 ---@field multi? boolean if multiple items can be selected (will return a new Batch instead of item)
 ---@field autoselect_single? boolean should we automatically return the first item if it is the ony one in the list
----@field fzf_resolve_timeout? integer how long (in ms) to wait for fzf to pass the result to the callback after the fzf window closes (default: 100)
+--- Wait for `x` ms to pass the result to the callback after the fzf window closes (default: 100)
+---@field fzf_resolve_timeout? integer
 
 -- TODO: add picker based on pressing a character in the buffer (like sts/autopairs/flash)
 
 --- Pick from the items. Must be in a coroutine or use a callback.
 ---@param self manipulator.Batch
----@param opts? manipulator.Batch.pick.Opts can include all `fzf-lua.config.Base` opts
+---@param opts? manipulator.Batch.pick.Opts
 ---@return manipulator.Region|manipulator.Batch?
 function Batch:pick(opts)
 	opts = U.expand_action(self.config, opts, 'pick', Batch.opt_inheritance)
+	---@cast opts manipulator.Batch.pick.Opts
 
 	local co
 	local callback = opts.callback
 	local pick
+	---@diagnostic disable-next-line: need-check-nil
 	local function resolve(result) callback(opts.multi and self:new(result, self.Nil, opts) or result[1] or self.Nil) end
 	if #self.items <= 1 and (opts.autoselect_single or #self.items == 0) then
 		if type(callback) ~= 'function' then callback = function(x) pick = x end end
@@ -244,6 +252,7 @@ function Batch:pick(opts)
 	end
 
 	if opts.prompt:match '%w$' then opts.prompt = opts.prompt .. opts.prompt_postfix end
+	local get_pos = opts.pos_getter or require('manipulator.pos').get_or_make
 
 	if opts.picker == 'native' then
 		vim.ui.select(self.items, opts, function(item) resolve { item } end)
@@ -262,8 +271,6 @@ function Batch:pick(opts)
 			resolve(mapped)
 		end
 
-		local Pos = require 'manipulator.pos'
-
 		-- Build entries with location information for preview.
 		-- Use make_entry.lcol directly so fzf-lua's builtin previewer can jump to file:line:col.
 		local entries = { [#self.items] = '' }
@@ -271,15 +278,15 @@ function Batch:pick(opts)
 		local bufs = { [#self.items] = 1 } ---@cast bufs (integer|{})[]
 		for i, item in ipairs(self.items) do
 			local display = opts.format_item(item)
-			local buf = item.buf or 0
+			local pos = get_pos(item)
+			local buf = pos.buf or 0
 			if not bufs[-buf] then bufs[-buf] = { bufnr = buf, path = vim.api.nvim_buf_get_name(buf) } end
 			bufs[i] = buf
-			local range = Pos.raw(item)
-			if range and range[2] then
+			if pos and pos[2] then
 				display = make_entry.lcol({ ---@type string
 					filename = tostring(buf), -- pretend to be a filename to save on search space
-					lnum = range[1] + 1,
-					col = range[2] + 1,
+					lnum = pos[1] + 1,
+					col = pos[2] + 1,
 					text = display,
 				}, opts)
 			end

@@ -1,5 +1,4 @@
 local U = require 'manipulator.utils'
-local Batch = require 'manipulator.batch'
 
 local mod_wrap = {}
 do
@@ -346,7 +345,7 @@ function CallPath:_exec(opts)
 			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call - most common
 				item = fn(item, unpack(call.args or {}))
 			else -- ### vim motion - run for multiple iterations
-				local batch = Batch.from_recursive(
+				local batch = require('manipulator.batch').from_recursive(
 					item,
 					vim.v.count1,
 					function(item) -- always query the fn so that item metatable can change the impl
