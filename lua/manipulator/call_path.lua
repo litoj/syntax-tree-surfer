@@ -260,7 +260,7 @@ function CallPath:as_op(opts)
 	opts = self:action_opts(opts, 'as_op')
 
 	return function()
-		if opts.except and U.validate_mode(opts.except) or opts.dot_repeat_only then return self:exec() end
+		if opts.except and U.validate_mode(opts.except) then return self:exec() end
 
 		local keys = vim.fn.mode() == 'i' and '\015g@' or 'g@'
 		if opts.dot_repeat_only then -- special handling to retain `vim.v.count1` value
@@ -318,7 +318,7 @@ function CallPath:_exec(opts)
 
 	local item = self.item
 	for i, call in ipairs(self.path) do
-		if item == nil and type(call.anchor) ~= 'string' then -- no item and not at an anchor
+		if item == nil and type(call.anchor) ~= 'string' then -- ## no item and not at an anchor
 			error('CallPath step ' .. i - 1 .. ' returned nil: ' .. tostring(self))
 		elseif type(call.fn) ~= 'string' and type(call.fn) ~= 'function' then -- ## no object access
 			if rawget(call, 'args') then -- directly call the object
