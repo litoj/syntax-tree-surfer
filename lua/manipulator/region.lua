@@ -45,7 +45,7 @@ M.default_config = {
 	select = { linewise = 'auto', end_ = true },
 	swap = { visual = true, cursor_with = 'current' },
 
-	current = { fallback = '.' },
+	current = { fallback = '.', end_shift_ptn = '^$' },
 
 	presets = {},
 }
@@ -326,14 +326,22 @@ function Region:select(opts)
 
 	local r = self:rangemod(opts)
 
-	local leading = U.validate_mode 'visual' and select(2, Range.from('v', '.'))
+	local end_ = opts.end_
+	if U.validate_mode 'visual' then end_ = not select(2, Range.from('v', '.')) end
 
 	local c_mode = vim.fn.mode()
 	local text_mode = MODS.evaluate_linewise(r, opts) and 'V' or 'v'
 	if c_mode ~= text_mode then
 		if c_mode == 'i' then
 			if opts.from_insert == 'temporary-visual' then
-				vim.cmd.normal { bang = true, args = { '\015' } }
+				local v = end_ and r or r:end_(true)
+				local c = end_ and r:end_(true) or r
+				vim.api.nvim_feedkeys(
+					('\015%s%dgg0%d o%dgg0%d '):format(text_mode, v[1] + 1, v[2], c[1] + 1, c[2]),
+					'n',
+					false
+				)
+				return
 			elseif opts.from_insert ~= 'select' then
 				vim.cmd.stopinsert()
 			end
@@ -344,8 +352,6 @@ function Region:select(opts)
 		vim.cmd.normal { bang = true, args = { text_mode } }
 	end
 
-	local end_ = opts.end_
-	if leading ~= nil then end_ = not leading end
 	Range.jump(r, not end_)
 	vim.cmd.normal 'o'
 	Range.jump(r, end_)
@@ -551,11 +557,12 @@ do -- ### Wrapper for nil matches
 end
 
 --- Options for retrieving various kinds of user position.
----@class manipulator.Region.module.current.Opts: manipulator.range_mods.end_shift.Opts,manipulator.range_mods.linewise.Opts,manipulator.Region.rangemod.Opts
+---@class manipulator.Region.module.current.Opts: manipulator.range_mods.linewise.Opts,manipulator.Region.rangemod.Opts
 --- When to apply end_shift fixing (default: true = allow all modes with appropriate ptn format)
 --- - `'point'` to exclude selections
 --- - `opts.end_shift_ptn` is applied only in insert or select modes
 ---@field shift_mode? boolean|'point'
+---@field end_shift_ptn? string shift if the last range char matches
 --- Where to source the position / range from.
 ---  - `'visual'|manipulator.VisualModeEnabler`: try to get visual range of allowed modes (default)
 --- - `'operator'`: behave like an operator
@@ -610,7 +617,8 @@ function M.current(opts)
 		if type(expr) == 'table' then mode = 'fallback_range' end
 	end
 
-	if opts.rangemod then r = Region.rangemod(r, opts) end
+	---@diagnostic disable-next-line: missing-fields
+	if opts.rangemod then r = Region.rangemod({ range = r }, opts) end
 
 	-- Shift the end by 1 if in insert mode or at EOL in visual mode
 	if opts.shift_mode ~= false then
@@ -624,6 +632,7 @@ function M.current(opts)
 		end
 		if es_ptn then
 			r = Range.get_or_make(MODS.end_shift(r, {
+				shift_point_range = not mode,
 				end_shift_ptn = es_ptn ~= true and es_ptn or nil, -- ensure the default can be used
 			}))
 		end

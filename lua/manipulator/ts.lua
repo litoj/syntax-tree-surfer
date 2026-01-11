@@ -73,7 +73,7 @@ M.default_config = {
 	langs = { ['*'] = true, 'luap', 'printf', 'regex' },
 	types = {
 		['*'] = true,
-		-- common pg node types directly in the defaults
+		-- most common node types directly in the defaults
 		'string_content',
 		'comment_content',
 
@@ -109,7 +109,7 @@ M.default_config = {
 
 			types = { 'definition$', 'declaration$', '.*comment.*', '.*asignment.*' },
 			select = { -- what can we apply the mod to
-				rangemod = MODS.with_docs,
+				rangemod = { inherit = true, MODS.with_docs },
 				langs = { inherit = true, matchers = { ['.*doc.*'] = false } },
 			},
 			-- which preceeding nodes can join the selection (docs/comments)
@@ -289,6 +289,12 @@ end
 ---@return manipulator.TS? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:child(opts, idx)
+	if type(opts) == 'number' or opts == 'closer_edge' then
+		if idx then error('incorrect order of arguments to TS:child: ' .. vim.inspect { opts = opts, idx = idx }) end
+		idx = opts
+		opts = nil
+	end
+
 	opts = self:action_opts(opts, 'child')
 	if not idx or idx == 'closer_edge' then
 		idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
@@ -374,6 +380,7 @@ function M.get_all(opts, from_range)
 	opts = M:action_opts(opts, 'get_all')
 
 	local r = from_range and Range.get_or_make(from_range)
+	if r then r[4] = r[4] + 1 end
 	local ltree = vim.treesitter.get_parser(r and r.buf or 0)
 	if not ltree then return Batch:new({}, TS.Nil, TS.Nil) end
 
@@ -421,6 +428,7 @@ function M.get(range, opts)
 	if opts.langs then ltree = ltree:language_for_range(r) end
 
 	local ret = TS:new(ltree:named_node_for_range(r), ltree, opts)
+	r[4] = r[4] - 1
 	return ret
 end
 

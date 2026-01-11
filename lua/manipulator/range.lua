@@ -132,11 +132,19 @@ do -- ### Comparisons
 		return (a[3] or a[1]) == b[1] and (a[4] or a[2]) - b[2] or (a[3] or a[1]) - b[1]
 	end
 
+	-- NOTE: had to be adapted from Pos, because operators don't work via metatable search
+
 	--- Negations work differently because of being a range - actual point comparison:
 	--- (a >= b) == (a:end_() >= b:start())
 	--- (a:end_() < b) == (a:end_() < b:end_())
 	function Range.__lt(a, b) return Range.cmp(a, b) < 0 end
 	function Range.__le(a, b) return Range.cmp(a, b) <= 0 end
+	function Range.__eq(a, b)
+		if not Pos.buf_eq(a, b, 0) then return false end
+		a = Range.raw(a)
+		b = Range.raw(b)
+		return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] and a[4] == b[4]
+	end
 end
 
 do -- ### Set operations
@@ -245,7 +253,7 @@ do -- ### Text operations - always updates line, column is updated only if on th
 		a = Range.get_or_make(a)
 		if a[4] == vim.v.maxcol then return Pos.new({ a[3] - a[1] + 1, 0 }, a.buf) end
 		if a[1] == a[3] then
-			return Pos.new({ 0, a[4] - a[2] }, a.buf)
+			return Pos.new({ 0, a[4] - a[2] + 1 }, a.buf)
 		else
 			return Pos.new({ a[3] - a[1], a[4] }, a.buf)
 		end
@@ -267,15 +275,13 @@ do -- ### Text operations - always updates line, column is updated only if on th
 	---@param p anypos point to align / set new position to
 	---@return manipulator.Range
 	function Range.aligned_to(r, p)
+		---@diagnostic disable-next-line: undefined-field
 		r, p = Range.new(r, p.buf), Pos.raw(p)
 
 		r[3] = p[1] + (r[3] - r[1])
 		r[1] = p[1]
 
-		if r[4] ~= vim.v.maxcol then
-			if r[1] == r[3] then r[4] = p[2] + r[4] - r[2] end
-			r[2] = p[2]
-		end
+		r:offset_col(p[2] - r[2])
 		return r
 	end
 
@@ -294,7 +300,14 @@ do -- ### Text operations - always updates line, column is updated only if on th
 		if change_sign < 0 then assert(not r:intersection(at), 'Removing overlapping text not implemented') end
 
 		if Pos.cmp(at, r) <= 0 then -- change before our text -> adjustment required
-			if at[3] == r[1] then r:offset_col(change_sign * Range.size(at)[2]) end
+			if at[1] == r[1] then
+				if at[3] == r[1] then -- all on the same line (but still has to check maxcol later)
+					r:offset_col(change_sign * Range.size(at)[2])
+				elseif change_sign > 0 then
+					-- inserting multiline directly in front of r and shift by what was between (-r[2]+r[2])
+					r:offset_col(at[4] - at[2] + 1)
+				end
+			end
 			-- extend by 1 extra line if we're including EOL
 			local line_diff = at[3] - at[1] + (at[4] == vim.v.maxcol and 1 or 0)
 			r[1] = r[1] + change_sign * line_diff

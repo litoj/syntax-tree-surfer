@@ -146,10 +146,7 @@ do -- ### Comparisons
 		if not Pos.buf_eq(a, b, 0) then return false end
 		a = Pos.raw(a)
 		b = Pos.raw(b)
-		for i = 1, #a do
-			if a[i] ~= b[i] then return false end
-		end
-		return true
+		return a[1] == b[1] and a[2] == b[2]
 	end
 	function Pos.__lt(a, b) return Pos.cmp(a, b) < 0 end
 	function Pos.__le(a, b) return Pos.cmp(a, b) <= 0 end

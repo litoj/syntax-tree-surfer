@@ -122,7 +122,7 @@ do -- end_shift with adjustment for insert mode
 		opts = opts or {}
 		local r = Range.new(self)
 
-		local col = r[4] + (opts.shift_mode == 1 and 1 or -1)
+		local col = r[4] + (opts.shift_mode == 1 and 1 or 0) -- check the col to be added or removed
 		local char = r:end_():get_line():sub(col + 1, col + 1)
 
 		col = char:match(opts.end_shift_ptn or '^[, ]?$') and (opts.shift_mode == 1 and 1 or -1) or 0

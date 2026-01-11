@@ -250,6 +250,7 @@ end
 
 ---@class manipulator.CallPath.as_op.Opts
 --- Which modes should run normally and not as an operator (to keep visual selection)
+--- - forced `'visual'` if `.dot_repeat_only` is enabled
 ---@field except? false|manipulator.VisualModeEnabler|'visual'
 --- Should we return the 'g@' or will this be mapped without `{expr=true}` (both work in insert)
 ---@field return_expr? boolean
@@ -265,7 +266,9 @@ function CallPath:as_op(opts)
 	opts = self:action_opts(opts, 'as_op')
 
 	return function()
-		if opts.except and U.validate_mode(opts.except) then return self:exec() end
+		if (opts.except or opts.dot_repeat_only) and U.validate_mode(opts.except or 'visual') then
+			return self:exec()
+		end
 
 		-- if self-actuating, then <C-o> mode will be finished -> check for temporary normal mode
 		local keys = vim.fn.mode(not opts.return_expr):match 'i' and '\015g@' or 'g@'
