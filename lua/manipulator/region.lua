@@ -222,7 +222,7 @@ end
 Region.get_lines = Range.get_lines
 Region.get_text = Range.get_text
 
-function Region:as_qf_item()
+function Region:as_vim_list_item()
 	local r = self.range
 	return {
 		bufnr = self.buf,
@@ -235,7 +235,10 @@ function Region:as_qf_item()
 end
 
 ---@param action? 'a'|'r' `vim.fn.setqflist` action to perform - append or replace (default: 'a')
-function Region:add_to_qf(action) vim.fn.setqflist({ self:as_qf_item() }, action or 'a') end
+function Region:add_to_qf(action) vim.fn.setqflist({ self:as_vim_list_item() }, action or 'a') end
+
+---@param action? 'a'|'r'|' ' `vim.fn.setloclist` action to perform - append or replace or push (default: 'a')
+function Region:add_to_ll(action) vim.fn.setloclist(0, { self:as_vim_list_item() }, action or 'a') end
 
 ---@class manipulator.Region.set_reg.Opts: manipulator.Region.rangemod.Opts
 ---@field register? string defaults to `vim.v.register`

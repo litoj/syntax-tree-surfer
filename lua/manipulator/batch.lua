@@ -193,13 +193,25 @@ end
 function Batch:to_iter() return vim.iter(self.items) end
 
 --- Presumes the items are Region items that can be added to the quickfix window
----@param mode? 'a'|'w' `vim.fn.setqflist` action to perform - append or overwrite (default: 'w')
-function Batch:to_qf(mode)
+---@param mode? 'a'|'r' `vim.fn.setqflist` action to perform - append or overwrite (default: 'r')
+function Batch:set_qf(mode)
 	local list = {}
 	for _, item in ipairs(self.items) do
-		list[#list + 1] = item:as_qf_item()
+		list[#list + 1] = item:as_vim_list_item()
 	end
-	vim.fn.setqflist(list, mode or 'w')
+	vim.fn.setqflist(list, mode or 'r')
+
+	return self
+end
+
+--- Presumes the items are Region items that can be added to the loclist window
+---@param mode? 'a'|'r'|' ' `vim.fn.setloclist` action to perform - append or overwrite or push (default: ' ')
+function Batch:set_ll(mode)
+	local list = {}
+	for _, item in ipairs(self.items) do
+		list[#list + 1] = item:as_vim_list_item()
+	end
+	vim.fn.setloclist(0, list, mode or ' ')
 
 	return self
 end
