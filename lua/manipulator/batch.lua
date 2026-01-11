@@ -15,7 +15,7 @@ Batch.__index = Batch
 ---@field pick? manipulator.Batch.pick.Opts
 ---@field presets? { [string]: manipulator.Batch.Config }
 
-Batch.opt_inheritance = { pick = true }
+Batch.action_map = { pick = true }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
@@ -46,7 +46,7 @@ M.default_config = {
 M.config = M.default_config
 ---@param config manipulator.Batch.module.Config
 function M.setup(config)
-	M.config = U.module_setup({ active = M.config }, M.default_config, config, Batch.opt_inheritance)
+	M.config = U.module_setup({ active = M.config }, M.default_config, config, Batch.action_map)
 	return M
 end
 
@@ -73,7 +73,7 @@ function Batch:fix_items(opts)
 	end
 end
 
----@param items manipulator.Region[] contents
+---@param items any[] contents
 ---@param Nil? manipulator.Region|false what to return, if no items are valid/chosen
 ---@param config? manipulator.Batch.Opts
 ---@return manipulator.Batch
@@ -89,7 +89,7 @@ function Batch:__tostring() return '[' .. table.concat(self.items, ', ') .. ']' 
 ---@param inplace boolean should we replace current config or make new copy (default: false)
 function Batch:with(config, inplace)
 	---@diagnostic disable-next-line: inject-field
-	config = U.expand_config(self.config.presets, self.config, config, Batch.opt_inheritance)
+	config = U.expand_config(self.config.presets, self.config, config, Batch.action_map)
 
 	local ret = inplace and self or self:new(self.items, self.Nil, config)
 	ret.config = config
@@ -221,7 +221,7 @@ end
 ---@param opts? manipulator.Batch.pick.Opts
 ---@return manipulator.Region|manipulator.Batch?
 function Batch:pick(opts)
-	opts = U.expand_action(self.config, opts, 'pick', Batch.opt_inheritance)
+	opts = U.expand_action(self.config, opts, 'pick', Batch.action_map)
 	---@cast opts manipulator.Batch.pick.Opts
 
 	local co

@@ -194,8 +194,8 @@ M.debug = nil ---@type vim.log.levels?
 function TS:action_opts(opts, action)
 	local save_as = opts and opts.save_as
 	if save_as then
-		---@diagnostic disable-next-line: assign-type-mismatch
-		M.config.presets[save_as] = opts
+		---@diagnostic disable-next-line: assign-type-mismatch, undefined-field, need-check-nil
+		M.config.presets[save_as] = action and { types = opts.types, langs = opts.langs, [action] = opts } or opts
 	end
 
 	M.config.presets.ft_base = self.config or M.config

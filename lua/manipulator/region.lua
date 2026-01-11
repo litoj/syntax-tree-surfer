@@ -78,9 +78,9 @@ end
 
 ---@generic O,S: manipulator.Region
 ---@param self S
----@param fun fun(self:S):O?
+---@param fun fun(self:S, ...):O?
 ---@return O
-function Region:map(fun) return fun(self) end
+function Region:map(fun, ...) return fun(self, ...) end
 
 ---@protected
 function Region:__tostring() return self:get_lines(true)[1] or 'NilRegion' end

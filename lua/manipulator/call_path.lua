@@ -7,6 +7,7 @@ local U = require 'manipulator.utils'
 --- - `false` to not execute until manual call of `:exec()` (the default),
 --- - `true` to `:exec()` calls immediately - returns a new wrapper.
 ---@field exec_on_call? number|false|true
+---@field immutable_args? boolean if arguments should be the copy of passed arguments instead
 ---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
@@ -69,6 +70,7 @@ function M:new(...) return CallPath:new(...) end
 ---@type manipulator.CallPath.Config
 M.default_config = {
 	immutable = true,
+	immutable_args = false,
 	exec_on_call = false,
 
 	exec = {
@@ -144,11 +146,12 @@ end
 
 local PathAnchor = { __index = function() return 1 end }
 
-local function get_mutable(cp)
-	local old_self = cp -- to be able to check if path was called as a method or fn
-	if cp.config.immutable then cp = cp:new() end
-	cp.old_self = old_self
-	return cp
+---@return self
+function CallPath:mutable()
+	local old_self = self -- to be able to check if path was called as a method or fn
+	if self.config.immutable then self = self:new() end
+	self.old_self = old_self
+	return self
 end
 
 ---@private
@@ -163,7 +166,7 @@ function CallPath:__index(key)
 		return self:as_op { dot_repeat_only = true }
 	end
 
-	self = get_mutable(self)
+	self = self:mutable()
 
 	local k1 = type(key) == 'string' and #key > 1 and key:sub(1, 1) or ''
 	if k1 == '&' then -- placeholder set (reference/ptr)
@@ -194,7 +197,8 @@ end
 function CallPath:__call(a1, ...)
 	local args = rawget(self, 'old_self') == a1 and { ... } or { a1, ... }
 
-	self = get_mutable(self)
+	self = self:mutable()
+	if self.config.immutable_args then args = vim.deepcopy(args) end
 
 	local call = self.path[self.idx]
 
@@ -230,7 +234,8 @@ end
 ---   interations, or carry on (accepting the last good value or giving an error) (default: 'print')
 ---@return P self copy
 function CallPath:with_count(target, on_fail)
-	self = get_mutable(self)
+	---@diagnostic disable-next-line: undefined-field because lua_ls is dumb with generics
+	self = self:mutable()
 
 	local as_motion = U.get_or(on_fail, 'print') or 'ignore'
 	if target == 'on_next' then

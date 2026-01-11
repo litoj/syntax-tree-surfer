@@ -307,28 +307,28 @@ do -- ### config inheritance/extension helpers
 		return config
 	end
 
-	--- Expands `self` and `self[action]` into `act_opts` following the `opt_inheritance`.
+	--- Expands `self` and `self[action]` into `act_opts` following the `action_map`.
 	--- Action defaults inheritance from other presets must be resolved with `M.expand_config`.
 	--- - such as: `cfg={ presets={['P1']={ act = {def_val=1} }}, act = { inherit='P1.act' } }`
-	--- Actions should be mapped to their defaults in `opt_inheritance`.
+	--- Actions should be mapped to their defaults in `action_map`.
 	--- - actions can inherit only from other actions, or its parent.
 	--- If `self` has a preset dependency, it will be expanded before chain resolution.
 	---@generic O: manipulator.Preset
 	---@param self O|{ presets: {[string]: O} }
 	---@param act_opts? manipulator.Action|{inherit:string}|string user options specifically for the action - modifiable
 	---@param action? string name of what we're resolving - none to get a normal config expansion
-	---@param opt_inheritance {[string]: boolean|string} keys with inheritance defaults
+	---@param action_map {[string]: boolean|string} keys with inheritance defaults
 	---@return manipulator.Action config
-	function M.expand_action(self, act_opts, action, opt_inheritance)
+	function M.expand_action(self, act_opts, action, action_map)
 		if act_opts and act_opts.inherit == false then return act_opts end
-		if not action then return M.expand_config(self.presets, self, act_opts, opt_inheritance) end
+		if not action then return M.expand_config(self.presets, self, act_opts, action_map) end
 
 		act_opts = type(act_opts) ~= 'table' and { inherit = act_opts } or act_opts ---@type table
 
 		-- new table with inheritance to distinguish inherited keys from explicit user options
 		-- also resolves the config if just a template (ts.get_ft_config)
 		self = (act_opts.inherit or self.inherit)
-				and M.expand_config(self.presets, self, { inherit = act_opts.inherit }, opt_inheritance)
+				and M.expand_config(self.presets, self, { inherit = act_opts.inherit }, action_map)
 			or self
 		if act_opts.inherit then act_opts.inherit = true end -- preset was resolved, now process normally
 
@@ -344,7 +344,7 @@ do -- ### config inheritance/extension helpers
 			if preset then
 				act_opts.inherit = nil -- allow preset to set the next config to inherit
 				for key, val in pairs(preset) do
-					if not opt_inheritance[key] then
+					if not action_map[key] then
 						if act_opts[key] == nil then
 							act_opts[key] = val
 						else
@@ -354,7 +354,7 @@ do -- ### config inheritance/extension helpers
 				end
 			end
 
-			default_p_name = opt_inheritance[default_p_name] -- advance to the next action to inherit from
+			default_p_name = action_map[default_p_name] -- advance to the next action to inherit from
 		end
 
 		presets['self'] = nil
