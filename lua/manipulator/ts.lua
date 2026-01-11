@@ -48,7 +48,7 @@ TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 
 ---@class manipulator.TS.module: manipulator.TS
 ---@field class manipulator.TS
-local M = U.static_wrap_for_oop(TS, {})
+local M = U.get_static(TS, {})
 
 function M.activate_enablers(opts)
 	if opts.types then U.activate_enabler(opts.types, '[^a-z_]') end

@@ -1,43 +1,12 @@
 local U = require 'manipulator.utils'
 
-local mod_wrap = {}
-do
-	local fb_call_wrap = {} -- wrap for a fallback call if the next key doesn't exist on the current item
-	function fb_call_wrap:__tostring() return 'fb_call_wrap' end
-	function fb_call_wrap:__call(_, ...) -- catch args without provided self
-		self.args = { ... }
-		return self
-	end
-	function fb_call_wrap:__index(key)
-		local wrappee = rawget(self.item, key)
-		if wrappee then -- is in static module -> no `self` needed
-			self[key] = function(_, ...) return wrappee(...) end
-			return self[key]
-		elseif type(self.item[key] or type) ~= 'function' then -- field access by some intermediate checker
-			return self.item[key]
-		else -- call fallback function to get the object version and seek the key there
-			wrappee = self.item.current(unpack(self.args))
-			if not wrappee[key] then error('No such method ' .. key .. '() on ' .. tostring(wrappee)) end
-			return function(_, ...) return wrappee[key](wrappee, ...) end
-		end
-	end
-	setmetatable(fb_call_wrap, fb_call_wrap)
-
-	function mod_wrap:__tostring() return 'mod_wrap' end
-	function mod_wrap:__index(key)
-		-- will be called only if the index isn't found, therefore is new and needs initializing
-		self[key] = setmetatable({ item = require('manipulator.' .. key), args = {} }, fb_call_wrap)
-		return self[key]
-	end
-	setmetatable(mod_wrap, mod_wrap)
-end
-
 ---@class manipulator.CallPath.Config
 ---@field immutable? boolean if path additions produce new objects instead of updates
----@field exec_on_call? # NOTE: makes return value useless when running async and `immutable=false`
----| number # in ms until actual execution - updates itself,
----| false # to not execute until manual call of `:exec()` (the default),
----| true # to `:exec()` calls immediately - returns a new wrapper.
+--- NOTE: makes return value useless when running async and `immutable=false`
+--- - `number` in ms until actual execution - updates itself,
+--- - `false` to not execute until manual call of `:exec()` (the default),
+--- - `true` to `:exec()` calls immediately - returns a new wrapper.
+---@field exec_on_call? number|false|true
 ---@field exec? manipulator.CallPath.exec.Opts
 ---@field as_op? manipulator.CallPath.as_op.Opts
 
@@ -57,11 +26,33 @@ local CallPath = {}
 ---@overload fun(...):manipulator.Region
 ---@class manipulator.CallPath.Region: manipulator.CallPath,manipulator.Region,{[string]:manipulator.CallPath.Region|fun(...):manipulator.CallPath.Region}
 
----Building syntax:
+local method_to_fn_call = {} -- wrap to ensure the first callpath call on a module is static (no self)
+function method_to_fn_call:__index(key)
+	local wrappee = rawget(self.item, key)
+	if type(wrappee) == 'function' then -- is in static module -> no `self` needed
+		self[key] = function(_, ...) return wrappee(...) end
+		return self[key]
+	end
+
+	return self.item[key]
+end
+
+local function wrap_mod(mod)
+	if not rawget(method_to_fn_call, mod) then
+		method_to_fn_call[mod] = setmetatable(
+			{ item = require('manipulator.' .. mod) or error('invalid manipulator module name: ' .. mod) },
+			method_to_fn_call
+		)
+	end
+
+	return CallPath:new(method_to_fn_call[mod])
+end
+
+--- Building syntax:
 --- - `mcp.<key>:xyz(opts):exec()` -> `require'manipulator.<key>'.current():xyz(opts)`
 --- - `mcp.ts({v_partial=0}).select.fn()` -> `require'manipulator.ts'.current({v_partial=0}):select()`
 --- - segments are immutable - every path is reusable and each added field/args produce a new copy
----Calling the build path:
+--- Calling the build path:
 --- - for keymappings pass in the `.fn` field,
 --- - for direct evaluation call `:exec()`/`.fn()` manually
 ---@overload fun(o?:manipulator.CallPath.Config):manipulator.CallPath for generic executor builds
@@ -69,10 +60,11 @@ local CallPath = {}
 ---@field ts manipulator.CallPath.TS|fun(opts:manipulator.TS.module.current.Opts):manipulator.CallPath.TS
 ---@field region manipulator.CallPath.Region|fun(opts:manipulator.Region.module.current.Opts):manipulator.CallPath.Region
 ---@field class manipulator.CallPath
-local M = U.static_wrap_for_oop(CallPath, {
-	__index = function(_, key) return CallPath:new(mod_wrap)[key] end,
-	__call = function(self, ...) return self:new(...) end,
+local M = U.get_static(CallPath, {
+	__index = function(_, key) return wrap_mod(key) end,
+	__call = function(_, ...) return CallPath:new(...) end,
 })
+function M:new(...) return CallPath:new(...) end
 
 ---@type manipulator.CallPath.Config
 M.default_config = {
@@ -152,6 +144,13 @@ end
 
 local PathAnchor = { __index = function() return 1 end }
 
+local function get_mutable(cp)
+	local old_self = cp -- to be able to check if path was called as a method or fn
+	if cp.config.immutable then cp = cp:new() end
+	cp.old_self = old_self
+	return cp
+end
+
 ---@private
 ---@param key string|fun(x:any,...):any?
 function CallPath:__index(key)
@@ -164,7 +163,7 @@ function CallPath:__index(key)
 		return self:as_op { dot_repeat_only = true }
 	end
 
-	if self.config.immutable then self = self:new() end
+	self = get_mutable(self)
 
 	local k1 = type(key) == 'string' and #key > 1 and key:sub(1, 1) or ''
 	if k1 == '&' then -- placeholder set (reference/ptr)
@@ -193,9 +192,9 @@ end
 
 ---@private
 function CallPath:__call(a1, ...)
-	local args = a1 and (getmetatable(a1) == CallPath) and { ... } or { a1, ... }
+	local args = rawget(self, 'old_self') == a1 and { ... } or { a1, ... }
 
-	if self.config.immutable then self = self:new() end
+	self = get_mutable(self)
 
 	local call = self.path[self.idx]
 
@@ -231,8 +230,7 @@ end
 ---   interations, or carry on (accepting the last good value or giving an error) (default: 'print')
 ---@return P self copy
 function CallPath:with_count(target, on_fail)
-	---@diagnostic disable-next-line: undefined-field
-	if self.config.immutable then self = self:new() end
+	self = get_mutable(self)
 
 	local as_motion = U.get_or(on_fail, 'print') or 'ignore'
 	if target == 'on_next' then
@@ -336,7 +334,7 @@ function CallPath:_exec(opts)
 
 			if not fn then
 				error("CallPath found no field '" .. call.fn .. "': " .. tostring(self))
-			elseif type(fn) ~= 'function' and not getmetatable(fn).__call then -- simple field access
+			elseif type(fn) ~= 'function' and not rawget(getmetatable(fn) or {}, '__call') then -- ### simple field access
 				if call.args or call.as_motion or not opts.allow_field_access then
 					error('CallPath item field ' .. call.fn .. ' is not callable: ' .. tostring(self))
 				else

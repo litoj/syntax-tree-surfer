@@ -57,26 +57,14 @@ do -- ### module helpers
 		end
 	end
 
-	--- Ensure that the function at {key} gets the appropriate `self` object
-	function M.fn_self_wrap(fake_self, real_self, key)
-		-- pass on `self` only if it seems it's a method call on fake_self
-		return function(arg_self, ...) return real_self[key](arg_self == fake_self and real_self or arg_self, ...) end
-	end
-
 	---@generic I,O
 	---@param oop I the class we want to add some extra fn to without being visible in the class
-	---@param static O|table object with static methods that should not be visible from {oop}
+	---@param base O|table object with static methods that should not be visible from {oop}
 	---@return O|I|{class:I} static delegating all {oop} functionality back to {oop}
-	function M.static_wrap_for_oop(oop, static)
-		rawset(static, 'class', oop)
-		local idx = static.__index
-		static.__index = function(_, k)
-			local val = oop[k]
-			if type(val) == 'function' then return M.fn_self_wrap(static, oop, k) end
-			if val ~= nil or not idx then return val end
-			return idx(static, k)
-		end
-		return setmetatable(static, static)
+	function M.get_static(oop, base)
+		base.class = oop
+		base.__index = base.__index or oop
+		return setmetatable(base, base)
 	end
 end
 

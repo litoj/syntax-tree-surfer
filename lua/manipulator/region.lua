@@ -33,7 +33,7 @@ Region.action_map = {
 
 ---@class manipulator.Region.module: manipulator.Region
 ---@field class manipulator.Region
-local M = U.static_wrap_for_oop(Region, {})
+local M = U.get_static(Region, {})
 
 ---@class manipulator.Region.module.Config: manipulator.Region.Config
 ---@field current? manipulator.Region.module.current.Opts

@@ -19,7 +19,7 @@ Batch.opt_inheritance = { pick = true }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
-local M = U.static_wrap_for_oop(Batch, {})
+local M = U.get_static(Batch, {})
 
 ---@class manipulator.Batch.module.Config: manipulator.Batch.Config
 ---@field recursive_limit? integer how many iterations is from_recursive() allowed by default
