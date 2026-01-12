@@ -511,6 +511,11 @@ do
 		opts.group = opts.group or 'default'
 
 		local active = queued_map[opts.group]
+		if not active and not self.range then
+			vim.notify('Cannot select Nil', vim.log.levels.WARN)
+			return self
+		end
+
 		if active and (not self.range or not vim.api.nvim_buf_is_valid(active.buf) or active.range:contains(self)) then
 			if vim.api.nvim_buf_is_valid(active.buf) then
 				queued_map[opts.group] = nil

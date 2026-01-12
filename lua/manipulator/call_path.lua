@@ -1,23 +1,13 @@
 local U = require 'manipulator.utils'
 
----@class manipulator.CallPath.Config
----@field immutable? boolean if path additions produce new objects instead of updates
---- NOTE: makes return value useless when running async and `immutable=false`
---- - `number` in ms until actual execution - updates itself,
---- - `false` to not execute until manual call of `:exec()` (the default),
---- - `true` to `:exec()` calls immediately - returns a new wrapper.
----@field exec_on_call? number|false|true
----@field immutable_args? boolean if arguments should be the copy of passed arguments instead
----@field exec? manipulator.CallPath.exec.Opts
----@field as_op? manipulator.CallPath.as_op.Opts
-
 ---@class manipulator.CallPath
 ---@field [any] self|fun(...):self
 ---@field protected item any
 ---@field protected config manipulator.CallPath.Config
 ---@field protected path manipulator.CallPath.CallInfo[]
 ---@field protected idx integer at which index do we write the path
----@field private next_as_motion? manipulator.MotionOpt if the next index/call should be made a motion
+---@field private next_as_motion false|manipulator.CallPath.ShortMotionOpt make next index a motion
+---@field private needs_coroutine boolean should it be executed in a coroutine
 ---@field fn function ready-for-mapping function executing the constructed path
 ---@field op_fn function shortcut for `self:as_op()`
 ---@field dot_fn function shortcut for `self:as_op({dot_repeat_only=true})`
@@ -67,6 +57,18 @@ local M = U.get_static(CallPath, {
 })
 function M:new(...) return CallPath:new(...) end
 
+---@class manipulator.CallPath.Config
+---@field immutable? boolean if path additions produce new objects instead of updates
+--- NOTE: makes return value useless when running async and `immutable=false`
+--- - `number` in ms until actual execution - updates itself,
+--- - `false` to not execute until manual call of `:exec()` (the default),
+--- - `true` to `:exec()` calls immediately - returns a new wrapper.
+---@field exec_on_call? number|false|true
+---@field immutable_args? boolean if arguments should be the copy of passed arguments instead
+---@field exec? manipulator.CallPath.exec.Opts
+---@field as_op? manipulator.CallPath.as_op.Opts
+---@field on_short_motion? manipulator.CallPath.ShortMotionOpt
+
 ---@type manipulator.CallPath.Config
 M.default_config = {
 	immutable = true,
@@ -74,12 +76,12 @@ M.default_config = {
 	exec_on_call = false,
 
 	exec = {
-		allow_shorter_motion = true,
 		allow_direct_calls = false,
 		allow_field_access = false,
 		skip_anchors = true,
 	},
 	as_op = { except = false, return_expr = false },
+	on_short_motion = 'last-or-self',
 
 	inherit = false,
 }
@@ -115,7 +117,7 @@ function CallPath:new(item, config)
 	self = U.tbl_inner_extend(
 		'keep',
 		{ config = config, path = {}, running = false },
-		self.path and self or { config = M.config, idx = 0 },
+		self.path and self or { config = M.config, idx = 0, next_as_motion = false, needs_coroutine = false },
 		1
 	)
 	self.item = item or self.item or false -- don't ever allow it to be nil (will break normal access)
@@ -133,7 +135,7 @@ end)
 ---@private
 ---@class manipulator.CallPath.CallInfo
 ---@field fn? string|fun(x:any,...):any? what method to call/apply on the object (else call the object directly)
----@field as_motion? manipulator.MotionOpt when applying `vim.v.count`-times what to do on nil
+---@field on_short_motion? manipulator.CallPath.ShortMotionOpt when applying `vim.v.count`-times and failing
 ---@field args? unknown[] what arguments to run the method with
 ---@field anchor? string if the object is an anchor and not part an actual call
 
@@ -185,8 +187,8 @@ function CallPath:__index(key)
 
 		error('Unknown anchor ' .. k1)
 	else -- path addition
-		self:_add_to_path { fn = key, as_motion = rawget(self, 'next_as_motion') }
-		self.next_as_motion = nil
+		self:_add_to_path { fn = key, on_short_motion = self.next_as_motion }
+		self.next_as_motion = false
 
 		if key == 'pick' then self.needs_coroutine = true end -- `Batch.pick` direct integration
 	end
@@ -205,7 +207,7 @@ function CallPath:__call(a1, ...)
 	if call and not call.args then -- count-enabled call
 		self.path[self.idx] = U.tbl_inner_extend('keep', { args = args }, call)
 		-- `manipulator.Batch.pick` direct integration to detect necessity for coroutine wrap
-		if call.fn == 'pick' and args[1] and args[1].callback then self.needs_coroutine = nil end
+		if call.fn == 'pick' and args[1] and args[1].callback then self.needs_coroutine = false end
 	else -- call of the wrapped object directly
 		self:_add_to_path { args = args }
 	end
@@ -221,27 +223,28 @@ function CallPath:__call(a1, ...)
 	return self
 end
 
----@alias manipulator.MotionOpt (nil|true|'print')|('ignore'|false) whether to inform the user when the motion falls short of the requested iteration count
+---@alias manipulator.CallPath.ShortMotionOpt 'last-or-nil'|'last-or-self'|'supply-nil'|'abort'
 
 --- Allow the {target} to be repeated `vim.v.count1`-times.
 --- NOTE: anchores are ignored -> if it is followed by an anchor and
 --- then an index that index will get marked as a motion.
 ---
----@generic P: manipulator.CallPath
----@param self P
----@param target manipulator.Batch.Action|'on_next' what to apply the count onto
----@param on_fail? manipulator.MotionOpt if we should inform the user about failing to do enough
----   interations, or carry on (accepting the last good value or giving an error) (default: 'print')
----@return P self copy
-function CallPath:with_count(target, on_fail)
+---@param target? manipulator.Batch.Action what to apply the count to - defaults to next path
+---@param on_short_motion? manipulator.CallPath.ShortMotionOpt on fewer iterations: (at EOF, etc.)
+--- - `'last-or-nil'|'last-or-self'`: continue with the last successful iteration or x if empty
+--- - `'supply-nil'`: continue with a Nil object
+--- - `'abort'`: print a message and end
+--- - defaults to `'last-or-self'` to mimmic vim motion behaviour at EOF
+---@return self
+function CallPath:repeatable(target, on_short_motion)
 	---@diagnostic disable-next-line: undefined-field because lua_ls is dumb with generics
 	self = self:mutable()
 
-	local as_motion = U.get_or(on_fail, 'print') or 'ignore'
-	if target == 'on_next' then
-		self.next_as_motion = as_motion
+	on_short_motion = on_short_motion or M.config.on_short_motion or 'last-or-self'
+	if not target then
+		self.next_as_motion = on_short_motion
 	elseif target then
-		self:_add_to_path { fn = target, as_motion = as_motion }
+		self:_add_to_path { fn = target, on_short_motion = on_short_motion }
 	else
 		error 'Param `target` is required'
 	end
@@ -274,7 +277,7 @@ function CallPath:as_op(opts)
 		local keys = vim.fn.mode(not opts.return_expr):match 'i' and '\015g@' or 'g@'
 		if opts.dot_repeat_only then -- special handling to retain `vim.v.count1` value
 			M.opfunc = function() self:exec() end
-			keys = keys .. tostring(vim.v.count1) .. 'j'
+			keys = keys .. tostring(vim.v.count1) .. 'l'
 		else
 			M.opfunc = function(opmode)
 				vim.g.manip_opmode = opmode
@@ -290,8 +293,6 @@ function CallPath:as_op(opts)
 end
 
 ---@class manipulator.CallPath.exec.Opts
---- Should we use the last value of the repeated motion when bellow vim.v.count1
----@field allow_shorter_motion? boolean
 --- Should arguments for direct calls on the wrapped object be executed or produce an error
 ---@field allow_direct_calls? boolean
 --- Should paths that don't lead to a function be considered a simple field access
@@ -303,7 +304,7 @@ end
 ---@param opts? manipulator.CallPath.exec.Opts
 ---@return any
 function CallPath:exec(opts)
-	if rawget(self, 'needs_coroutine') then
+	if self.needs_coroutine then
 		local co = coroutine.running()
 		if not co then
 			return coroutine.wrap(function() return self:_exec(opts) end)()
@@ -344,12 +345,12 @@ function CallPath:_exec(opts)
 			if not fn then
 				error("CallPath found no field '" .. call.fn .. "': " .. tostring(self))
 			elseif type(fn) ~= 'function' and not rawget(getmetatable(fn) or {}, '__call') then -- ### simple field access
-				if call.args or call.as_motion or not opts.allow_field_access then
+				if call.args or call.on_short_motion or not opts.allow_field_access then
 					error('CallPath item field ' .. call.fn .. ' is not callable: ' .. tostring(self))
 				else
 					item = fn -- not a fn - just a field of `item`
 				end
-			elseif not call.as_motion or vim.v.count1 == 1 then -- ### single method call - most common
+			elseif not call.on_short_motion or vim.v.count1 == 1 then -- ### single method call - most common
 				item = fn(item, unpack(call.args or {}))
 			else -- ### vim motion - run for multiple iterations
 				local Batch = require 'manipulator.batch'
@@ -360,13 +361,14 @@ function CallPath:_exec(opts)
 				if len == vim.v.count1 then
 					item = batch:at(len)
 				else
-					if call.as_motion == 'print' then vim.notify('Got to count: ' .. len, vim.log.levels.INFO) end
+					vim.notify('Got to count: ' .. len, vim.log.levels.INFO)
 
-					if opts.allow_shorter_motion and len > 0 then
-						item = batch:at(-1)
+					if call.on_short_motion == 'abort' then
+						break
+					elseif call.on_short_motion == 'supply-nil' then
+						item = item.Nil
 					else
-						if call.as_motion == 'print' then break end
-						error('CallPath iteration count not satisfied: ' .. len)
+						item = len > 0 and batch:at(-1) or (call.on_short_motion == 'last-or-self' and item or item.Nil)
 					end
 				end
 			end
@@ -376,7 +378,7 @@ function CallPath:_exec(opts)
 	if opts.src == 'update' then
 		self.item = item
 		self.path = {}
-		self.needs_coroutine = nil -- all steps processed -> async was also processed
+		self.needs_coroutine = false -- all steps processed -> async was also processed
 		self.running = false
 	elseif opts.src then
 		self.item = self.backup
