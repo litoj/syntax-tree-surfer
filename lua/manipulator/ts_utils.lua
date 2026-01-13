@@ -50,8 +50,6 @@ end
 function M.top_identity(opts, node, ltree, return_parent)
 	if not node then return end
 
-	-- if opts.query then
-
 	local parent, otree = node, ltree
 
 	-- if enabled skip to lowest accepted language tree (from current ltree upwards)
@@ -63,6 +61,12 @@ function M.top_identity(opts, node, ltree, return_parent)
 		end
 
 		if ltree ~= otree then parent = ltree:node_for_range { node:range() } end
+	end
+
+	if opts.query then
+		---@diagnostic disable-next-line: inject-field
+		opts._t_def = rawget(opts.types, '*')
+		opts.types['*'] = true
 	end
 
 	-- update the range to the found acceptable node to find its top identity
@@ -78,6 +82,12 @@ function M.top_identity(opts, node, ltree, return_parent)
 		end
 
 		ok, return_node = M.valid_parented_node(opts, node, return_node, parent, return_parent)
+	end
+
+	if opts.query then
+		opts.types['*'] = opts._t_def
+		---@diagnostic disable-next-line: inject-field
+		opts._t_def = nil
 	end
 
 	return return_node, return_parent and ltree or otree
@@ -165,7 +175,7 @@ function M.get_child(opts, node, ltree, idx)
 	return find_valid_child(opts, child, ltree, idx, node)
 end
 
----@class manipulator.TS.GraphOpts: manipulator.TS.Opts
+---@class manipulator.TS.GraphOpts: manipulator.TS.QueryOpts
 ---@field allow_child? boolean if children of the current node can be returned (NOTE: forced `false` for prev)
 ---@field max_descend? integer|false how many lower levels to scan for a result (not necessarily direct child)
 ---@field max_ascend? integer|false the furthest parent to consider returning

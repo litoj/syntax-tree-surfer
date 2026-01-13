@@ -68,7 +68,6 @@ M.default_config = {
 
 	ts = {
 		inherit = false,
-		query = false,
 		langs = { ['*'] = true, 'luap', 'printf', 'regex' },
 		types = {
 			['*'] = true,
@@ -145,7 +144,6 @@ M.default_config = {
 					'text',
 				},
 			},
-
 			lua = {
 				types = {
 					inherit = true,

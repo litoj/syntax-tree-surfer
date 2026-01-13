@@ -1,4 +1,4 @@
----@diagnostic disable: invisible
+---@diagnostic disable: invisible, missing-fields
 
 local Region = require 'manipulator.region'
 local U = require 'manipulator.utils'
@@ -21,8 +21,8 @@ TS.__index = TS
 ---@field save_as? false|string a non-inheritable setting to save the expanded opts into a preset
 
 ---@class manipulator.TS.Config: manipulator.TS.Opts, manipulator.Region.Config
----@field parent? manipulator.TS.Opts
----@field child? manipulator.TS.Opts
+---@field parent? manipulator.TS.QueryOpts
+---@field child? manipulator.TS.QueryOpts
 ---@field sibling? manipulator.TS.Opts
 ---@field next_sibling? manipulator.TS.Opts
 ---@field prev_sibling? manipulator.TS.Opts
@@ -40,8 +40,8 @@ TS.__index = TS
 --- - `'ltree_or_buf`: best of both worlds - prefer ltree, use buf when ltree is not known yet
 ---@field use_lang_presets? false|'buf'|'ltree'|'ltree_or_buf'
 ---@field ft_to_lang? table<string,string> map filetype to TS language
----@field get? manipulator.TS.module.get.Opts
----@field get_all? manipulator.TS.module.get.Opts
+---@field get? manipulator.TS.QueryOpts
+---@field get_all? manipulator.TS.QueryOpts
 ---@field current? manipulator.TS.module.current.Opts
 ---@field debug? false|vim.log.levels
 
@@ -184,19 +184,32 @@ function TS:__tostring()
 	return string.format('%s: %s', self.node and self.node:type() or 'invalid', TS.super.__tostring(self))
 end
 
+---@class manipulator.TS.QueryOpts: manipulator.TS.Opts
+--- Query which we use to filter the types (default: false - filters by raw node types).
+--- Either the category to load, or custom query to filter by
+---@field query? false|string|'highlights'|'textobjects'|'locals'
+
 --- Get a parent node.
----@param opts? manipulator.TS.Opts|string
+---@param opts? manipulator.TS.QueryOpts|string
 ---@return manipulator.TS? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:parent(opts)
 	opts = self:action_opts(opts, 'parent')
+
+	if opts.query then -- XXX: assumes we're in the top ltree
+		return self:new(
+			TQ.get_ancestor({ self.node:range() }, self.ltree, opts.query, opts.types, true, false),
+			self.ltree,
+			opts
+		)
+	end
 
 	local node, ltree = TU.top_identity(opts, self.node, self.ltree, true)
 	return self:new(node, ltree, opts), ltree ~= self.ltree
 end
 
 --- Get a child node.
----@param opts? manipulator.TS.Opts|string
+---@param opts? manipulator.TS.QueryOpts|string
 ---@param idx? integer|Range4|'closer_edge' child index
 --- - `<0` for reverse indexing, or a range it should contain
 --- - `'closer_edge'` to choose from the end closer to the cursor (default)
@@ -212,6 +225,14 @@ function TS:child(opts, idx)
 	opts = self:action_opts(opts, 'child')
 	if not idx or idx == 'closer_edge' then
 		idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
+	end
+
+	if opts.query then -- XXX: assumes we're in the top ltree
+		return self:new(
+			TQ.get_descendant({ self.node:range() }, self.ltree, opts.query, opts.types, true, idx),
+			self.ltree,
+			opts
+		)
 	end
 
 	local node, ltree = TU.get_child(opts, self.node, self.ltree, idx)
@@ -252,6 +273,11 @@ end
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:next(opts)
 	opts = self:action_opts(opts, 'next')
+
+	if opts.query then -- XXX: assumes we're in the top ltree
+		return self:new(TQ.get_next({ self.node:range() }, self.ltree, opts.query, opts.types, true), self.ltree, opts)
+	end
+
 	local node, ltree = TU.search_in_graph('next', opts, self.node, self.ltree)
 	return self:new(node, ltree, opts), ltree == self.ltree
 end
@@ -262,6 +288,11 @@ end
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:prev(opts)
 	opts = self:action_opts(opts, 'prev')
+
+	if opts.query then -- XXX: assumes we're in the top ltree
+		return self:new(TQ.get_prev({ self.node:range() }, self.ltree, opts.query, opts.types, true), self.ltree, opts)
+	end
+
 	local node, ltree = TU.search_in_graph('prev', opts, self.node, self.ltree)
 	return self:new(node, ltree, opts), ltree == self.ltree
 end
@@ -287,7 +318,7 @@ do -- ### Wrapper for nil TSNode matches
 end
 
 --- Get all matching nodes spanning the entire buffer.
----@param opts manipulator.TS.module.get.Opts
+---@param opts manipulator.TS.QueryOpts
 ---@param from_range? anyrange where should the nodes come from (whole buffer by default)
 ---@return manipulator.Batch
 function M.get_all(opts, from_range)
@@ -327,14 +358,9 @@ function M.get_all(opts, from_range)
 	return Batch:new(nodes, opts.nil_wrap and TS.Nil)
 end
 
----@class manipulator.TS.module.get.Opts: manipulator.TS.Opts
---- Query which we use to filter the types (default: false - filters by raw node types (no @)).
---- Either the category to load, or custom query to filter by
----@field query? false|string|'highlights'|'textobjects'|'locals'
-
 --- Get a node covering given range.
 ---@param range anypos range that the result node must include
----@param opts manipulator.TS.module.get.Opts
+---@param opts manipulator.TS.QueryOpts
 ---@return manipulator.TS?
 function M.get(range, opts)
 	opts = M:action_opts(opts, 'get')
@@ -346,10 +372,7 @@ function M.get(range, opts)
 	r[4] = r[4] + 1 -- NOTE: TSNode:range() is end exclusive
 	local ret
 	if opts.query then
-		local captures = opts.types -- save because capture groups have different names than node types
-		opts.types = U.activate_enabler { ['*'] = true }
-		ret = TS:new(TQ.get_ancestor(r, ltree, opts.query, captures, true, true), ltree, opts)
-		opts.types = captures
+		ret = TS:new(TQ.get_ancestor(r, ltree, opts.query, opts.types, true, true), ltree, opts)
 	else
 		if opts.langs then ltree = ltree:language_for_range(r) end
 		ret = TS:new(ltree:named_node_for_range(r), ltree, opts)
@@ -359,7 +382,7 @@ function M.get(range, opts)
 	return ret
 end
 
----@class manipulator.TS.module.current.Opts: manipulator.TS.module.get.Opts,manipulator.Region.module.current.Opts
+---@class manipulator.TS.module.current.Opts: manipulator.TS.QueryOpts,manipulator.Region.module.current.Opts
 --- When node is larger than visual selection, what node should we return (default: '.')
 ---@field on_partial? 'larger'|pos_expr|false
 

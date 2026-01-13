@@ -16,8 +16,6 @@ function M.get_all(ltree, query, filter, captures)
 	-- TODO: to make it usable as a general alternate traversal
 	-- 1. detect changes in buffer and invalidate cache after change
 	-- 2. get and cache all nodes matching query with the metadata in some processable format
-	-- 3. implement the base methods used on nodes
-	-- 4. result returns a normal node -> next use has to find it in the cache again
 
 	local query = query:match '[^a-z0-9]' and vim.treesitter.query.parse(ltree:lang(), query)
 		or vim.treesitter.query.get(ltree:lang(), query)
@@ -76,10 +74,10 @@ local function sorted(nodes, cmp, first)
 	return min
 end
 
----@alias query_dir fun(br:Range4,lt:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean):(TSNode|TSNode[])
+---@alias query_dir fun(r:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean):(TSNode|TSNode[])
 
 ---@see manipulator.ts_query.get_all
----@type fun(br:Range4,lt:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,s:boolean):(TSNode|TSNode[])
+---@type fun(br:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,s:boolean):(TSNode|TSNode[])
 function M.get_ancestor(base_range, ltree, query, captures, get_first, allow_self)
 	local containedness = allow_self and 0 or 1
 	local filter = function(node) return Range.cmp_containment({ node:range() }, base_range) >= containedness end
@@ -89,10 +87,9 @@ end
 
 ---@see manipulator.ts_query.get_all
 ---@param idx 0|-1 which end to look for the child from (how to sort the descendants)
----@type fun(br:Range4,lt:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,s:boolean,i:0|-1):(TSNode|TSNode[])
-function M.get_descendant(base_range, ltree, query, captures, get_first, allow_self, idx)
-	local containedness = allow_self and 0 or 1
-	local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) >= containedness end
+---@type fun(r:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,i:0|-1):(TSNode|TSNode[])
+function M.get_descendant(base_range, ltree, query, captures, get_first, idx)
+	local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) > 0 end
 	local nodes = M.get_all(ltree, query, filter, captures)
 	return sorted(nodes, idx == 0 and M.comparators.top_left or M.comparators.top_right, get_first)
 end
