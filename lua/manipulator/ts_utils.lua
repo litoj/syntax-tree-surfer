@@ -1,8 +1,10 @@
 ---@diagnostic disable: missing-fields
----@class manipulator.ts_utils
-local M = {}
 
 local Range = require 'manipulator.range'
+local TQ = require 'manipulator.ts_query'
+
+---@class manipulator.ts_utils
+local M = {}
 
 ---@param opts manipulator.TS.Opts
 ---@param node TSNode
@@ -47,6 +49,8 @@ end
 ---return_parent:boolean?): (TSNode?,vim.treesitter.LanguageTree?)
 function M.top_identity(opts, node, ltree, return_parent)
 	if not node then return end
+
+	-- if opts.query then
 
 	local parent, otree = node, ltree
 

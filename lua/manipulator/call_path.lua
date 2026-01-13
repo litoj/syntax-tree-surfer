@@ -1,5 +1,17 @@
 local U = require 'manipulator.utils'
 
+---@class manipulator.CallPath.Config
+---@field immutable? boolean if path additions produce new objects instead of updates
+--- NOTE: makes return value useless when running async and `immutable=false`
+--- - `number` in ms until actual execution - updates itself,
+--- - `false` to not execute until manual call of `:exec()` (the default),
+--- - `true` to `:exec()` calls immediately - returns a new wrapper.
+---@field exec_on_call? number|false|true
+---@field immutable_args? boolean if arguments should be the copy of passed arguments instead
+---@field exec? manipulator.CallPath.exec.Opts
+---@field as_op? manipulator.CallPath.as_op.Opts
+---@field on_short_motion? manipulator.CallPath.ShortMotionOpt
+
 ---@class manipulator.CallPath
 ---@field [any] self|fun(...):self
 ---@field protected item any
@@ -51,49 +63,12 @@ end
 ---@field ts manipulator.CallPath.TS|manipulator.TS.module
 ---@field region manipulator.CallPath.Region|manipulator.Region.module
 ---@field class manipulator.CallPath
+---@field config manipulator.CallPath.Config
 local M = U.get_static(CallPath, {
 	__index = function(_, key) return wrap_mod(key) end,
 	__call = function(_, ...) return CallPath:new(...) end,
 })
 function M:new(...) return CallPath:new(...) end
-
----@class manipulator.CallPath.Config
----@field immutable? boolean if path additions produce new objects instead of updates
---- NOTE: makes return value useless when running async and `immutable=false`
---- - `number` in ms until actual execution - updates itself,
---- - `false` to not execute until manual call of `:exec()` (the default),
---- - `true` to `:exec()` calls immediately - returns a new wrapper.
----@field exec_on_call? number|false|true
----@field immutable_args? boolean if arguments should be the copy of passed arguments instead
----@field exec? manipulator.CallPath.exec.Opts
----@field as_op? manipulator.CallPath.as_op.Opts
----@field on_short_motion? manipulator.CallPath.ShortMotionOpt
-
----@type manipulator.CallPath.Config
-M.default_config = {
-	immutable = true,
-	immutable_args = false,
-	exec_on_call = false,
-
-	exec = {
-		allow_direct_calls = false,
-		allow_field_access = false,
-		skip_anchors = true,
-	},
-	as_op = { except = false, return_expr = false },
-	on_short_motion = 'last-or-self',
-
-	inherit = false,
-}
-
----@type manipulator.CallPath.Config
-M.config = M.default_config
-
----@param config manipulator.CallPath.Config
-function M.setup(config)
-	M.config = U.expand_config({ active = M.config }, M.default_config, config, {})
-	return M
-end
 
 --- Get **immutable** options for the given actions from current config
 ---@generic O

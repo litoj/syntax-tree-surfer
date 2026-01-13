@@ -1,6 +1,6 @@
 local U = require 'manipulator.utils'
 local Range = require 'manipulator.range'
-local MODS = require 'manipulator.range_mods'
+local RM = require 'manipulator.range_mods'
 local Batch = require 'manipulator.batch'
 
 ---@class manipulator.Region: manipulator.BufRange
@@ -37,26 +37,6 @@ local M = U.get_static(Region, {})
 
 ---@class manipulator.Region.module.Config: manipulator.Region.Config
 ---@field current? manipulator.Region.module.current.Opts
-
----@type manipulator.Region.module.Config
-M.default_config = {
-	inherit = false,
-	jump = { rangemod = { MODS.trimmed } },
-	select = { linewise = 'auto', end_ = true },
-	swap = { visual = true, cursor_with = 'current' },
-
-	current = { fallback = '.', end_shift_ptn = '^$' },
-
-	presets = {},
-}
----@type manipulator.Region.module.Config
-M.config = M.default_config
-M.config.presets.active = M.config
----@param config manipulator.Region.module.Config
-function M.setup(config)
-	M.config = U.module_setup(M.config.presets, M.default_config, config, Region.action_map)
-	return M
-end
 
 ---@protected
 ---@generic O: table
@@ -193,7 +173,7 @@ function Region:mod(opts)
 		r[2] = (#lines == 1 and (r[4] - (#lines[#lines] - 1)) or 0)
 	end
 
-	if lw then r = MODS.linewise(r, opts, lw) end
+	if lw then r = RM.linewise(r, opts, lw) end
 
 	return Region:new { range = r, buf = self.buf, text = text, lines = lines }
 end
@@ -311,7 +291,7 @@ function Region:jump(opts)
 
 	Range.jump({
 		buf = self.buf,
-		range = Region.rangemod(self, opts, { shift_mode = 'insert', MODS.end_shift }),
+		range = Region.rangemod(self, opts, { shift_mode = 'insert', RM.end_shift }),
 	}, opts.end_)
 end
 
@@ -333,7 +313,7 @@ function Region:select(opts)
 	if U.validate_mode 'visual' then end_ = not select(2, Range.from('v', '.')) end
 
 	local c_mode = vim.fn.mode()
-	local text_mode = MODS.evaluate_linewise(r, opts) and 'V' or 'v'
+	local text_mode = RM.evaluate_linewise(r, opts) and 'V' or 'v'
 	if c_mode ~= text_mode then
 		if c_mode == 'i' then
 			if opts.from_insert == 'temporary-visual' then
@@ -639,7 +619,7 @@ function M.current(opts)
 			es_ptn = (mode == 'v' or mode == 'V') and '^$' or es_ptn
 		end
 		if es_ptn then
-			r = Range.get_or_make(MODS.end_shift(r, {
+			r = Range.get_or_make(RM.end_shift(r, {
 				shift_point_range = not mode,
 				end_shift_ptn = es_ptn ~= true and es_ptn or nil, -- ensure the default can be used
 			}))
@@ -649,7 +629,7 @@ function M.current(opts)
 	-- Extend to full lines (linewise visual mode or user override)
 	local lw = U.get_or(opts.linewise, 'auto')
 	if lw == 'auto' then lw = mode == 'V' or mode == 'S' end
-	if lw then r = MODS.linewise(r, opts, lw) end
+	if lw then r = RM.linewise(r, opts, lw) end
 
 	return Region:new { range = r, mouse = expr == 'mouse' }, mode
 end

@@ -119,14 +119,25 @@ do -- ### Getters / Actions
 		return as_pos and r or Range.new(r)
 	end
 
+	---@return manipulator.Pos
+	function Range.size(a)
+		a = Range.get_or_make(a)
+		if a[4] == vim.v.maxcol then return Pos.new({ a[3] - a[1] + 1, 0 }, a.buf) end
+		if a[1] == a[3] then
+			return Pos.new({ 0, a[4] - a[2] + 1 }, a.buf)
+		else
+			return Pos.new({ a[3] - a[1], a[4] }, a.buf)
+		end
+	end
+
 	---@param r anypos
 	---@param end_ boolean
 	function Range.jump(r, end_) Pos.jump(Range[end_ and 'end_' or 'start'](r)) end
 end
 
 do -- ### Comparisons
-	--- Compare end of `a` with start of `b`
-	function Range.cmp(a, b)
+	--- Compare end of `a` with start of `b` - not commutative
+	function Range.cmp_end(a, b)
 		-- assert(Pos.buf_eq(a, b, 0), 'Cannot compare ranges from different buffers')
 		a = Pos.raw(a)
 		b = Pos.raw(b)
@@ -139,8 +150,8 @@ do -- ### Comparisons
 	--- - actual point comparison:
 	---   (a >= b) == (a:end_() >= b:start())
 	---   (a:end_() < b) == (a:end_() < b:end_())
-	function Range.__lt(a, b) return Range.cmp(a, b) < 0 end
-	function Range.__le(a, b) return Range.cmp(a, b) <= 0 end
+	function Range.__lt(a, b) return Range.cmp_end(a, b) < 0 end
+	function Range.__le(a, b) return Range.cmp_end(a, b) <= 0 end
 	function Range.__eq(a, b)
 		if not Pos.buf_eq(a, b, 0) then return false end
 		a = Range.raw(a)
@@ -150,15 +161,18 @@ do -- ### Comparisons
 end
 
 do -- ### Set operations
-	---@param a anyrange
-	---@param b anypos
-	function Range.contains(a, b)
-		if not Pos.buf_eq(a, b, 0) then return false end
-		a = Range.raw(a)
-		b = Range.raw(b)
+	---@return -1|0|1 -1: doesn't contain, 1: does, 0: a==b
+	function Range.cmp_containment(a, b)
+		if not Pos.buf_eq(a, b, 0) then return -1 end
+		a = Pos.raw(a)
+		b = Pos.raw(b)
 
-		return Pos.cmp(a, b) <= 0 and Range.cmp(a, { b[3], b[4] }) >= 0
+		local s, e = Pos.cmp(a, b), Range.cmp_end(a, { b[3] or b[1], b[4] or b[2] })
+		return s > 0 and -1 or (e < 0 and -1) or ((s < 0 or e > 0) and 1) or 0
 	end
+
+	function Range.contains(a, b) return Range.cmp_containment(a, b) >= 0 end
+	function Range.contains_not_eq(a, b) return Range.cmp_containment(a, b) > 0 end
 
 	--- Intersection result (nil if not intersecting)
 	---@param a anypos
@@ -250,17 +264,6 @@ do -- ### Set operations
 end
 
 do -- ### Text operations - always updates line, column is updated only if on the same line
-	---@return manipulator.Pos
-	function Range.size(a)
-		a = Range.get_or_make(a)
-		if a[4] == vim.v.maxcol then return Pos.new({ a[3] - a[1] + 1, 0 }, a.buf) end
-		if a[1] == a[3] then
-			return Pos.new({ 0, a[4] - a[2] + 1 }, a.buf)
-		else
-			return Pos.new({ a[3] - a[1], a[4] }, a.buf)
-		end
-	end
-
 	---@protected
 	--- Adjust to changes on the line of the start just before the start.
 	--- It shouldn't be possible to achieve a negative column result, so we're not checking.

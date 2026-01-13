@@ -15,40 +15,15 @@ Batch.__index = Batch
 ---@field pick? manipulator.Batch.pick.Opts
 ---@field presets? { [string]: manipulator.Batch.Config }
 
+---@class manipulator.Batch.module.Config: manipulator.Batch.Config
+---@field recursive_limit? integer how many iterations is from_recursive() allowed by default
+
 Batch.action_map = { pick = true }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
+---@field config manipulator.Batch.module.Config
 local M = U.get_static(Batch, {})
-
----@class manipulator.Batch.module.Config: manipulator.Batch.Config
----@field recursive_limit? integer how many iterations is from_recursive() allowed by default
-
----@type manipulator.Batch.module.Config
-M.default_config = {
-	on_nil_item = 'drop_all',
-	inherit = false,
-
-	pick = {
-		format_item = tostring,
-		picker = 'native',
-		prompt = 'Choose item',
-		prompt_postfix = ': ',
-		multi = false,
-		fzf_resolve_timeout = 100,
-		callback = false,
-	},
-
-	recursive_limit = 500,
-}
-
----@type manipulator.Batch.module.Config
-M.config = M.default_config
----@param config manipulator.Batch.module.Config
-function M.setup(config)
-	M.config = U.module_setup({ active = M.config }, M.default_config, config, Batch.action_map)
-	return M
-end
 
 ---@private
 ---@param opts manipulator.Batch.Opts
