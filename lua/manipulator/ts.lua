@@ -154,7 +154,7 @@ end
 function TS:new(node, ltree, opts)
 	-- method opts also apply to the result node
 	-- always select the top node of valid type and the same range (not the top if top has bad type)
-	node, ltree = TU.top_identity(opts, node, ltree)
+	node, ltree = TU.get_identical_ancestor(opts, node, ltree)
 	if not node or not ltree then return opts.nil_wrap and self.Nil end
 
 	return TS.super.new(self, {
@@ -204,7 +204,7 @@ function TS:parent(opts)
 		)
 	end
 
-	local node, ltree = TU.top_identity(opts, self.node, self.ltree, true)
+	local node, ltree = TU.get_identical_ancestor(opts, self.node, self.ltree, true)
 	return self:new(node, ltree, opts), ltree ~= self.ltree
 end
 
@@ -227,15 +227,7 @@ function TS:child(opts, idx)
 		idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
 	end
 
-	if opts.query then -- XXX: assumes we're in the top ltree
-		return self:new(
-			TQ.get_descendant({ self.node:range() }, self.ltree, opts.query, opts.types, true, idx),
-			self.ltree,
-			opts
-		)
-	end
-
-	local node, ltree = TU.get_child(opts, self.node, self.ltree, idx)
+	local node, ltree = TU.get_descendant(opts, self.node, self.ltree, idx)
 	return self:new(node, ltree, opts), ltree ~= self.ltree
 end
 
@@ -274,10 +266,6 @@ end
 function TS:next(opts)
 	opts = self:action_opts(opts, 'next')
 
-	if opts.query then -- XXX: assumes we're in the top ltree
-		return self:new(TQ.get_next({ self.node:range() }, self.ltree, opts.query, opts.types, true), self.ltree, opts)
-	end
-
 	local node, ltree = TU.search_in_graph('next', opts, self.node, self.ltree)
 	return self:new(node, ltree, opts), ltree == self.ltree
 end
@@ -288,10 +276,6 @@ end
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:prev(opts)
 	opts = self:action_opts(opts, 'prev')
-
-	if opts.query then -- XXX: assumes we're in the top ltree
-		return self:new(TQ.get_prev({ self.node:range() }, self.ltree, opts.query, opts.types, true), self.ltree, opts)
-	end
 
 	local node, ltree = TU.search_in_graph('prev', opts, self.node, self.ltree)
 	return self:new(node, ltree, opts), ltree == self.ltree

@@ -13,7 +13,7 @@ local M = {}
 ---@param prefer_new boolean if the loop output would be the new node
 ---@return boolean # if the loop can end and return {return_node}
 ---@return TSNode? return_node updated to {node} or {new} if its type is accepted
-function M.valid_parented_node(opts, node, return_node, new, prefer_new)
+function M.validate_parented_node(opts, node, return_node, new, prefer_new)
 	-- ensure we hold the highest acceptable node
 	if not prefer_new and opts.types[node:type()] then return_node = node end
 
@@ -32,7 +32,7 @@ end
 
 ---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree):
 --- (TSNode?,vim.treesitter.LanguageTree?)
-function M.get_direct_parent(opts, node, ltree)
+function M.get_parent(opts, node, ltree)
 	local parent = node:parent()
 
 	if not parent and opts.langs then
@@ -47,7 +47,7 @@ end
 --- or lowest parent with larger range if {return_parent}.
 ---@type fun(opts:manipulator.TS.Opts, node:TSNode?, ltree:vim.treesitter.LanguageTree,
 ---return_parent:boolean?): (TSNode?,vim.treesitter.LanguageTree?)
-function M.top_identity(opts, node, ltree, return_parent)
+function M.get_identical_ancestor(opts, node, ltree, return_parent)
 	if not node then return end
 
 	local parent, otree = node, ltree
@@ -63,6 +63,7 @@ function M.top_identity(opts, node, ltree, return_parent)
 		if ltree ~= otree then parent = ltree:node_for_range { node:range() } end
 	end
 
+	---@diagnostic disable-next-line: undefined-field
 	if opts.query then
 		---@diagnostic disable-next-line: inject-field
 		opts._t_def = rawget(opts.types, '*')
@@ -81,9 +82,10 @@ function M.top_identity(opts, node, ltree, return_parent)
 			if ltree then parent = ltree:node_for_range { node:range() } end
 		end
 
-		ok, return_node = M.valid_parented_node(opts, node, return_node, parent, return_parent)
+		ok, return_node = M.validate_parented_node(opts, node, return_node, parent, return_parent)
 	end
 
+	---@diagnostic disable-next-line: undefined-field
 	if opts.query then
 		opts.types['*'] = opts._t_def
 		---@diagnostic disable-next-line: inject-field
@@ -95,7 +97,7 @@ end
 
 ---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
 ---idx:0|-1): (TSNode?,vim.treesitter.LanguageTree?)
-function M.get_direct_child(opts, node, ltree, idx)
+function M.get_child(opts, node, ltree, idx)
 	local cnt = node:named_child_count()
 
 	if cnt == 0 then -- search in the subtrees
@@ -121,27 +123,27 @@ function M.get_direct_child(opts, node, ltree, idx)
 end
 
 --- Depth-first search for a sub-node to the given side (first or last).
-local function find_valid_child(opts, node, ltree, idx, orig_parent)
+local function find_valid_descendant(opts, node, ltree, idx, orig_parent)
 	if node:type() == 'inline' then -- XXX: partial fix for md inline
 		-- manages to match the inner inline node only if there is no `block_continuation`
 		node = ltree:named_node_for_range { node:range() }
 		if node:parent() then return end
 	end
 
-	node, ltree = M.get_direct_child(opts, node, ltree, idx)
+	node, ltree = M.get_child(opts, node, ltree, idx)
 
 	while node do
-		if M.valid_parented_node(opts, orig_parent, nil, node, true) then return node, ltree end
-		local gchild, gtree = find_valid_child(opts, node, ltree, idx, orig_parent)
-		if M.valid_parented_node(opts, orig_parent, nil, gchild, true) then return gchild, gtree end
+		if M.validate_parented_node(opts, orig_parent, nil, node, true) then return node, ltree end
+		local gchild, gtree = find_valid_descendant(opts, node, ltree, idx, orig_parent)
+		if M.validate_parented_node(opts, orig_parent, nil, gchild, true) then return gchild, gtree end
 
 		node = node[idx >= 0 and 'next_named_sibling' or 'prev_named_sibling'](node)
 	end
 end
 
----@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree,
+---@type fun(opts:manipulator.TS.QueryOpts, node:TSNode, ltree:vim.treesitter.LanguageTree,
 ---idx?:integer|Range4): (TSNode?,vim.treesitter.LanguageTree?)
-function M.get_child(opts, node, ltree, idx)
+function M.get_descendant(opts, node, ltree, idx)
 	if not idx then idx = 0 end
 	local child = node
 
@@ -152,7 +154,7 @@ function M.get_child(opts, node, ltree, idx)
 		-- sift through identically-sized nodes until a new range
 		while cnt <= 1 do
 			node = child
-			child, ltree = M.get_direct_child(opts, child, ltree, idx)
+			child, ltree = M.get_child(opts, child, ltree, idx)
 			if child then
 				if not Range.__eq({ node:range() }, { child:range() }) then break end
 				cnt = child:named_child_count()
@@ -169,22 +171,33 @@ function M.get_child(opts, node, ltree, idx)
 		end
 
 		-- if the picked node is valid, or non-existent, then we're done
-		if not child or M.valid_parented_node(opts, node, nil, child, true) then return child, ltree end
+		if not child or M.validate_parented_node(opts, node, nil, child, true) then return child, ltree end
 	end
 
-	return find_valid_child(opts, child, ltree, idx, node)
+	if opts.query then -- TODO: implement a version working for a specific index
+		local base_range = { node:range() }
+		local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) > 0 end
+		return TQ.sorted(
+			TQ.get_all(filter, ltree, opts.query, opts.types),
+			idx == 0 and TQ.comparators.top_left or TQ.comparators.top_right,
+			true
+		)
+	end
+
+	return find_valid_descendant(opts, child, ltree, idx, node)
 end
 
+--- Traverse the graph left or right of the current node with the given restraints.
+--- NOTE: when using `.query` only comparison options work, not restrictions (`max_...`)
 ---@class manipulator.TS.GraphOpts: manipulator.TS.QueryOpts
----@field allow_child? boolean if children of the current node can be returned (NOTE: forced `false` for prev)
 ---@field max_descend? integer|false how many lower levels to scan for a result (not necessarily direct child)
 ---@field max_ascend? integer|false the furthest parent to consider returning
 ---@field max_link_dst? integer|false how far from the original can the common ancestor be (<= `max_ascend`)
+---@field allow_child? boolean if children of the current node can be returned (NOTE: forced `false` for prev)
 ---@field start_point? pos_expr|Range2 0-indexed, from where to start looking for nodes
 --- Should we look in direction by end of node or start.
 --- In 'prev' search can enforce no parent can be selected (end_() will always be after self:start())
 ---@field compare_end? boolean
--- ---@field match string scheme query to match TODO
 
 ---@type fun(direction:'prev'|'next',opts:manipulator.TS.GraphOpts, node:TSNode,
 ---ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
@@ -207,6 +220,16 @@ function M.search_in_graph(direction, opts, node, ltree)
 		local base_point = math.min(select(3, node:start()), Range.to_byte(opts.start_point, vim.v.maxcol))
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
+		if opts.query then
+			return TQ.sorted(
+				TQ.get_all(ok_range, ltree, opts.query, opts.types),
+				function(a, b) return cmp_fn(a) > cmp_fn(b) end,
+				true,
+				true
+			),
+				ltree
+		end
+
 		while continue() do
 			-- must begin with sibling to prevent looping parent-child in repeated uses
 			tmp = node:prev_named_sibling()
@@ -217,11 +240,11 @@ function M.search_in_graph(direction, opts, node, ltree)
 					node, ltree = tmp, tmp_tree
 					if depth == max_depth then break end
 					depth = depth + 1
-					tmp, tmp_tree = M.get_direct_child(opts, node, ltree, -1)
+					tmp, tmp_tree = M.get_child(opts, node, ltree, -1)
 				end
 			elseif depth > min_shared then
 				depth = depth - 1
-				node, ltree = M.get_direct_parent(opts, node, ltree)
+				node, ltree = M.get_parent(opts, node, ltree)
 			else
 				node = nil
 			end
@@ -233,10 +256,20 @@ function M.search_in_graph(direction, opts, node, ltree)
 		)
 		ok_range = function(node) return select(3, cmp_fn(node)) > base_point end
 
+		if opts.query then
+			return TQ.sorted(
+				TQ.get_all(ok_range, ltree, opts.query, opts.types),
+				function(a, b) return cmp_fn(a) < cmp_fn(b) end,
+				true,
+				true
+			),
+				ltree
+		end
+
 		while continue() do
 			if depth < max_depth then
 				depth = depth + 1
-				tmp, tmp_tree = M.get_direct_child(opts, node, ltree, 0)
+				tmp, tmp_tree = M.get_child(opts, node, ltree, 0)
 			else
 				tmp = nil
 			end
@@ -248,7 +281,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 					tmp = node:next_named_sibling()
 					if not tmp then
 						depth = depth - 1
-						node, ltree = M.get_direct_parent(opts, node, ltree)
+						node, ltree = M.get_parent(opts, node, ltree)
 					end
 				end
 			end

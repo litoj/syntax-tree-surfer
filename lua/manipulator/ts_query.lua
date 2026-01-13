@@ -7,12 +7,12 @@ local M = {}
 
 --- Get nodes of a custom query
 --- NOTE: When passing in the raw query string, you probably don't want to filter by node types.
+---@param filter fun(node:TSNode):boolean
 ---@param ltree vim.treesitter.LanguageTree NOTE: presumes the tree is the root tree -> 1 TSTree
 ---@param query string string of the actual query or a predefined group ('textobjects' etc.)
----@param filter fun(node:TSNode):boolean
 ---@param captures manipulator.Enabler which capture groups should we collect
 ---@return TSNode[]
-function M.get_all(ltree, query, filter, captures)
+function M.get_all(filter, ltree, query, captures)
 	-- TODO: to make it usable as a general alternate traversal
 	-- 1. detect changes in buffer and invalidate cache after change
 	-- 2. get and cache all nodes matching query with the metadata in some processable format
@@ -20,17 +20,30 @@ function M.get_all(ltree, query, filter, captures)
 	local query = query:match '[^a-z0-9]' and vim.treesitter.query.parse(ltree:lang(), query)
 		or vim.treesitter.query.get(ltree:lang(), query)
 
+	local accepts = {}
+	for i, c in ipairs(query.captures) do
+		if captures[c] then accepts[i] = true end
+	end
+	if vim.tbl_isempty(accepts) then
+		error(
+			'Selected types do not match any defined capture group: '
+				.. vim.inspect { available = query.captures, requested = captures }
+		)
+	end
+
 	local nodes = {}
 	for _, match, metadata in query:iter_matches(ltree:trees()[1]:root(), ltree._source, 0, -1) do
 		for id, found in pairs(match) do
-			local name = query.captures[id]
-			for _, node in ipairs(found) do
-				if metadata[id] then
-					error(
-						'TODO: finally sth with metadata, see what it is: ' .. vim.inspect { name = name, metadata[id] }
-					)
+			if accepts[id] then
+				for _, node in ipairs(found) do
+					if metadata[id] then
+						error(
+							'TODO: finally sth with metadata, see what it is: '
+								.. vim.inspect { name = query.captures[id], metadata[id] }
+						)
+					end
+					if filter(node) then nodes[#nodes + 1] = node end
 				end
-				if captures[name] and filter(node) then nodes[#nodes + 1] = node end
 			end
 		end
 	end
@@ -51,11 +64,12 @@ M.comparators = {
 }
 
 ---@param nodes TSNode[]
----@param first boolean should we get just the first node
 ---@param cmp fun(a:Range4, b:Range4):boolean should we swap b and a
+---@param first boolean should we get just the first node
+---@param no_cmp_wrap? boolean should the comparator be used as is (provide full node acces, not just range)
 ---@return TSNode[]|TSNode
-local function sorted(nodes, cmp, first)
-	local cmp = function(a, b) return cmp({ a:range() }, { b:range() }) end
+function M.sorted(nodes, cmp, first, no_cmp_wrap)
+	local cmp = no_cmp_wrap and cmp or function(a, b) return cmp({ a:range() }, { b:range() }) end
 	if not first then
 		table.sort(nodes, cmp)
 		return nodes
@@ -74,40 +88,13 @@ local function sorted(nodes, cmp, first)
 	return min
 end
 
----@alias query_dir fun(r:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean):(TSNode|TSNode[])
-
 ---@see manipulator.ts_query.get_all
 ---@type fun(br:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,s:boolean):(TSNode|TSNode[])
 function M.get_ancestor(base_range, ltree, query, captures, get_first, allow_self)
 	local containedness = allow_self and 0 or 1
 	local filter = function(node) return Range.cmp_containment({ node:range() }, base_range) >= containedness end
-	local nodes = M.get_all(ltree, query, filter, captures)
-	return sorted(nodes, M.comparators.bottom, get_first)
-end
-
----@see manipulator.ts_query.get_all
----@param idx 0|-1 which end to look for the child from (how to sort the descendants)
----@type fun(r:Range4,t:vim.treesitter.LanguageTree,q:string,c:manipulator.Enabler,f:boolean,i:0|-1):(TSNode|TSNode[])
-function M.get_descendant(base_range, ltree, query, captures, get_first, idx)
-	local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) > 0 end
-	local nodes = M.get_all(ltree, query, filter, captures)
-	return sorted(nodes, idx == 0 and M.comparators.top_left or M.comparators.top_right, get_first)
-end
-
----@see manipulator.ts_query.get_all
----@type query_dir
-function M.get_next(base_range, ltree, query, captures, get_first)
-	local filter = function(node) return Range.cmp_end(base_range, { node:range() }) < 0 end
-	local nodes = M.get_all(ltree, query, filter, captures)
-	return sorted(nodes, M.comparators.top_left, get_first)
-end
-
----@see manipulator.ts_query.get_all
----@type query_dir
-function M.get_prev(base_range, ltree, query, captures, get_first)
-	local filter = function(node) return Range.cmp_end({ node:range() }, base_range) < 0 end
-	local nodes = M.get_all(ltree, query, filter, captures)
-	return sorted(nodes, M.comparators.top_right, get_first)
+	local nodes = M.get_all(filter, ltree, query, captures)
+	return M.sorted(nodes, M.comparators.bottom, get_first)
 end
 
 return M
