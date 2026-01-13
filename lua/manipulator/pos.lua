@@ -134,7 +134,7 @@ do -- ### Comparisons
 	---@param b anypos
 	---@return integer # comparison of the positions (only first and second fields)
 	function Pos.cmp(a, b)
-		assert(Pos.buf_eq(a, b, 0), 'Cannot compare positions from different buffers')
+		-- assert(Pos.buf_eq(a, b, 0), 'Cannot compare positions from different buffers')
 		a = Pos.raw(a)
 		b = Pos.raw(b)
 		return a[1] == b[1] and a[2] - b[2] or a[1] - b[1]

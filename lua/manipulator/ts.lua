@@ -42,8 +42,8 @@ TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 	prev = 'in_graph',
 
 	get = true,
-	get_all = true,
-	current = true,
+	get_all = 'get',
+	current = 'get',
 })
 
 ---@class manipulator.TS.module: manipulator.TS
@@ -51,7 +51,7 @@ TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 local M = U.get_static(TS, {})
 
 function M.activate_enablers(opts)
-	if opts.types then U.activate_enabler(opts.types, '[^a-z_]') end
+	if opts.types then U.activate_enabler(opts.types, '[^a-z_@.]') end
 	if type(opts.langs) == 'table' then U.activate_enabler(opts.langs) end
 	return opts
 end
@@ -61,9 +61,12 @@ end
 --- - `'ltree'`: use only `vim.treesitter.LanguageTree:lang()` to choose the filetype
 ---   - each injected language can be treated differently
 ---   - getting the node (`.current()`, `.get_all()`, `.get()`) will be done with default config
+--- - `'buf'`: use current buffer filetype and map it to the its lang with `.ft_to_lang`
 --- - `'ltree_or_buf`: best of both worlds - prefer ltree, use buf when ltree is not known yet
----@field ft_preset_source? false|'buf'|'ltree'|'ltree_or_buf'
----@field get_all? manipulator.TS.Opts
+---@field use_lang_presets? false|'buf'|'ltree'|'ltree_or_buf'
+---@field ft_to_lang? table<string,string> map filetype to TS language
+---@field get? manipulator.TS.module.get.Opts
+---@field get_all? manipulator.TS.module.get.Opts
 ---@field current? manipulator.TS.module.current.Opts
 
 ---@type manipulator.TS.module.Config
@@ -92,9 +95,15 @@ M.default_config = {
 	next = { allow_child = true, start_point = '.' },
 	prev = {},
 
+	get = { query = false },
 	current = { linewise = false, on_partial = 'larger' },
 
-	ft_preset_source = 'ltree_or_buf',
+	use_lang_presets = 'ltree_or_buf',
+	ft_to_lang = {
+		tex = 'latex',
+		sh = 'bash',
+		cs = 'c_sharp',
+	},
 
 	presets = {
 		-- ### General-use presets
@@ -117,12 +126,11 @@ M.default_config = {
 			next_sibling = { types = { inherit = 'self' } }, -- do not inherit default (=sibling.types)
 		},
 
-		-- ### FileType presets
-		-- **always inherit from 'ft_base'** (gets set to the original 'super' we are replacing)
+		-- ### Presets for languages (/filetypes)
 		markdown = {
-			inherit = 'ft_base',
 			types = {
-				inherit = true, -- `true` always means _inherit from what parent table inherits (→ft_base)_
+				-- `true` always means _inherit from what parent table inherits (→'active' = base cfg)_
+				inherit = true,
 				'list_marker_minus',
 				'inline',
 				'block_continuation',
@@ -130,8 +138,7 @@ M.default_config = {
 				'marker$',
 			},
 		},
-		tex = {
-			inherit = 'ft_base',
+		latex = {
 			types = {
 				inherit = true,
 				'word',
@@ -140,7 +147,6 @@ M.default_config = {
 		},
 
 		lua = {
-			inherit = 'ft_base',
 			types = {
 				inherit = true,
 				'documentation',
@@ -171,16 +177,21 @@ end
 ---@param buf? integer
 ---@param ltree? vim.treesitter.LanguageTree
 ---@return manipulator.TS.Config?
-local function get_ft_config(buf, ltree)
+local function get_lang_preset(buf, ltree)
 	-- ltree_or_buffer? Y-> is there a preset for ltree? N-> return buffer
-	local bp = M.config.ft_preset_source ---@type string|manipulator.TS.Config
+	local bp = M.config.use_lang_presets ---@type string|manipulator.TS.Config
 	if bp then
-		if bp ~= 'buf' and ltree then bp = U.get_or(M.config.presets[ltree:lang()], bp) end
-		if type(bp) == 'string' and bp ~= 'ltree' then bp = M.config.presets[vim.bo[buf or 0].ft] end
-	end
-	if type(bp) == 'table' then
-		bp.presets = M.config.presets
-		return bp
+		if bp ~= 'buf' and ltree then bp = M.config.presets[ltree:lang()] or bp end
+		if type(bp) == 'string' and bp ~= 'ltree' then
+			local ft = vim.bo[buf or 0].ft
+			bp = M.config.presets[M.config.ft_to_lang[ft] or ft]
+		end
+
+		if type(bp) == 'table' then
+			bp.presets = M.config.presets
+			if bp.inherit == nil then bp.inherit = 'active' end -- set the correct base preset
+			return bp
+		end
 	end
 end
 
@@ -198,16 +209,13 @@ function TS:action_opts(opts, action)
 		M.config.presets[save_as] = action and { types = opts.types, langs = opts.langs, [action] = opts } or opts
 	end
 
-	M.config.presets.ft_base = self.config or M.config
-	opts = M.activate_enablers(U.expand_action(
+	opts = M.activate_enablers(U.expand_action(self.config or get_lang_preset(
 		---@diagnostic disable-next-line: undefined-field
-		get_ft_config(opts and opts.buf or self.buf, self.ltree) or M.config.presets.ft_base,
-		opts,
-		action,
-		self.action_map
-	))
+		opts and opts.buf or self.buf,
+		self.ltree
+	) or M.config, opts, action, self.action_map))
 
-	-- ensure it doesn't get inherited, but stays in the user opts in case he reuses them
+	-- ensure it doesn't get inherited, but stays in the user opts for reuse
 	if not save_as then opts.save_as = nil end
 
 	if M.debug then
@@ -216,7 +224,7 @@ function TS:action_opts(opts, action)
 		if package.loaded['reform'] then
 			print({ [action or 'config'] = opts }, 3, M.debug)
 		else
-			vim.notify(vim.inspect { action = action, opts = opts }, M.debug)
+			vim.notify(vim.inspect { [action or 'config'] = opts }, M.debug)
 		end
 		opts.presets = presets
 	end
@@ -249,7 +257,8 @@ function TS:new(node, ltree, opts)
 		range = range_fix(node, ltree._source),
 		node = node,
 		ltree = ltree,
-		config = self.config or M.config,
+		-- expand lang preset into new tbl to ensure base config updates will also update preset
+		config = self.config or self:action_opts(),
 	})
 end
 
@@ -373,7 +382,7 @@ do -- ### Wrapper for nil TSNode matches
 end
 
 --- Get all matching nodes spanning the entire buffer.
----@param opts manipulator.TS.Opts
+---@param opts manipulator.TS.module.get.Opts
 ---@param from_range? anyrange where should the nodes come from (whole buffer by default)
 ---@return manipulator.Batch
 function M.get_all(opts, from_range)
@@ -413,9 +422,49 @@ function M.get_all(opts, from_range)
 	return Batch:new(nodes, opts.nil_wrap and TS.Nil)
 end
 
+---@class manipulator.TS.module.get.Opts: manipulator.TS.Opts
+--- Query which we use to filter the types (default: false - filters by raw node types (no @)).
+--- Either the category to load, or custom query to filter by
+---@field query? false|string|'highlights'|'textobjects'|'locals'
+
+--- Get nodes of a custom query
+--- NOTE: When passing in the raw query string, you probably don't want to filter by node types.
+---@param filter fun(node:TSNode, name:string):boolean
+---@param ltree vim.treesitter.LanguageTree NOTE: presumes the tree is the root tree -> 1 TSTree
+---@param query_str string string of the actual query or a predefined group ('textobjects' etc.)
+---@return TSNode[]
+local function query_all(filter, ltree, query_str)
+	-- TODO: to make it usable as a general alternate traversal
+	-- 1. detect changes in buffer and invalidate cache after change
+	-- 2. get and cache all nodes matching query with the metadata in some processable format
+	-- 3. implement the base methods used on nodes
+	-- 4. result returns a normal node -> next use has to find it in the cache again
+	-- TODO: range should be a filter function
+
+	local query = query_str:match '[^a-z0-9]' and vim.treesitter.query.parse(ltree:lang(), query_str)
+		or vim.treesitter.query.get(ltree:lang(), query_str)
+
+	local nodes = {}
+	for _, match, metadata in query:iter_matches(ltree:trees()[1]:root(), ltree._source, 0, -1) do
+		for id, found in pairs(match) do
+			local name = query.captures[id]
+			for _, node in ipairs(found) do
+				if metadata[id] then
+					error(
+						'TODO: finally sth with metadata, see what it is: ' .. vim.inspect { name = name, metadata[id] }
+					)
+				end
+				if filter(node, name) then nodes[#nodes + 1] = node end
+			end
+		end
+	end
+
+	return nodes
+end
+
 --- Get a node covering given range.
 ---@param range anypos range that the result node must include
----@param opts manipulator.TS.Opts
+---@param opts manipulator.TS.module.get.Opts
 ---@return manipulator.TS?
 function M.get(range, opts)
 	opts = M:action_opts(opts, 'get')
@@ -425,14 +474,35 @@ function M.get(range, opts)
 	if not ltree then return TS:new(nil, nil, opts) end
 
 	r[4] = r[4] + 1 -- NOTE: TSNode:range() is end exclusive
-	if opts.langs then ltree = ltree:language_for_range(r) end
+	local ret
+	if opts.query then
+		local old_types = opts.types -- save because capture groups have different names than node types
+		opts.types = U.activate_enabler { ['*'] = true }
 
-	local ret = TS:new(ltree:named_node_for_range(r), ltree, opts)
+		local nodes = query_all(
+			---@diagnostic disable-next-line: missing-fields, need-check-nil
+			function(node, name) return Range.contains({ node:range() }, r) and old_types[name] end,
+			ltree,
+			opts.query
+		)
+		-- TODO: PERF OPTIMIZATION search just for the min
+		table.sort(nodes, function(a, b)
+			---@diagnostic disable-next-line: missing-fields, undefined-field
+			return Range.size { a:range() } < Range.size { b:range() }
+		end)
+
+		ret = TS:new(nodes[1], ltree, opts)
+		opts.types = old_types
+	else
+		if opts.langs then ltree = ltree:language_for_range(r) end
+		ret = TS:new(ltree:named_node_for_range(r), ltree, opts)
+	end
+
 	r[4] = r[4] - 1
 	return ret
 end
 
----@class manipulator.TS.module.current.Opts: manipulator.TS.Opts,manipulator.Region.module.current.Opts
+---@class manipulator.TS.module.current.Opts: manipulator.TS.module.get.Opts,manipulator.Region.module.current.Opts
 --- When node is larger than visual selection, what node should we return (default: '.')
 ---@field on_partial? 'larger'|pos_expr|false
 

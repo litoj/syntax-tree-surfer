@@ -8,6 +8,14 @@
 - `TSRegion`: treesitter full traversal including injected languages
   - filtering by node type & lang
   - selection possible with dynamic modifiers -> select fn with docs etc.
+  - matching structures using query syntax and catching into groups
+    - NOTE: this is meant for more complex, or language-agnostic matching
+    - example: select a function
+      ```lua
+      ts.current{query='textobjects', types={'function.outer'}}:print()
+      -- or manually list all the types for every language to work
+      ts.current{types={'^function_de','^method_de','arrow_function','function'}}:print()
+      ```
 - `CallPath`: flexible & reusable keymapping function builder
 - vim motion support (`5j`…) (via `CallPath:with_count`)
 - dot repeat + operator mode (via `CallPath:as_op`)
@@ -23,9 +31,7 @@
   - TOC up top
   - chapter about how to actually create mappings / module layout and meaning / design
 - add info/gtdefinition for types in info windows - _belongs to reform.nvim_
-- matching by query syntax and catching into groups
-- examples of operators (snf = select next function, gnn = jump next node)...
-  - either callpath extension or type presets (f/a/s/c/l…) for the letters
+- provide a way to get the query capture group of any given node (DEBUG)
 - refactor swap to allow swapping parent and child (i.e. conditionals)
 
 ### Syntax Tree Surfer is a plugin for Neovim that helps you surf through your document and move elements around using the nvim-treesitter API.

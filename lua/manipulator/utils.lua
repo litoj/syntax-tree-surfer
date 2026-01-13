@@ -236,6 +236,8 @@ do -- ### config inheritance/extension helpers
 	--- Inheritance is controlled by `.inherit` in {opts} or opt keys from {}.
 	--- Using `true` in opts and opt keys translates to the field in super at the same level, i.e.:
 	--- - `true` in a field in an action `a` is retrieved from the preset `super.a`
+	--- FIXME: expands configs without copying -> inheriting options will get expanded also in the
+	--- original preset -> base inherited config will get permanently imprinted
 	---@generic O: manipulator.Preset
 	---@param super O base options, or nil to not resolve the base yet
 	---@param presets { [string]: O } should contain ['super'] as the parent Opts

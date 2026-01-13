@@ -125,8 +125,9 @@ do -- ### Getters / Actions
 end
 
 do -- ### Comparisons
+	--- Compare end of `a` with start of `b`
 	function Range.cmp(a, b)
-		assert(Pos.buf_eq(a, b, 0), 'Cannot compare ranges from different buffers')
+		-- assert(Pos.buf_eq(a, b, 0), 'Cannot compare ranges from different buffers')
 		a = Pos.raw(a)
 		b = Pos.raw(b)
 		return (a[3] or a[1]) == b[1] and (a[4] or a[2]) - b[2] or (a[3] or a[1]) - b[1]
@@ -134,9 +135,10 @@ do -- ### Comparisons
 
 	-- NOTE: had to be adapted from Pos, because operators don't work via metatable search
 
-	--- Negations work differently because of being a range - actual point comparison:
-	--- (a >= b) == (a:end_() >= b:start())
-	--- (a:end_() < b) == (a:end_() < b:end_())
+	--- Negations work differently because of being a range -> >= compares E>S, not S>E
+	--- - actual point comparison:
+	---   (a >= b) == (a:end_() >= b:start())
+	---   (a:end_() < b) == (a:end_() < b:end_())
 	function Range.__lt(a, b) return Range.cmp(a, b) < 0 end
 	function Range.__le(a, b) return Range.cmp(a, b) <= 0 end
 	function Range.__eq(a, b)
@@ -155,7 +157,7 @@ do -- ### Set operations
 		a = Range.raw(a)
 		b = Range.raw(b)
 
-		return Pos.cmp(a, b) <= 0 and Range.cmp(b, { a[3], a[4] }) <= 0
+		return Pos.cmp(a, b) <= 0 and Range.cmp(a, { b[3], b[4] }) >= 0
 	end
 
 	--- Intersection result (nil if not intersecting)
@@ -164,7 +166,7 @@ do -- ### Set operations
 	function Range.intersection(a, b)
 		a = Range.get_or_make(a)
 		b = Range.get_or_make(b)
-		if not a:buf_eq(b, 0) or a < b or a > b then return nil end
+		if not a:buf_eq(b, 0) or a < b or b < a then return nil end
 
 		if a:start() <= b then
 			if b <= a:end_() then return b end
@@ -198,7 +200,7 @@ do -- ### Set operations
 	function Range.set_minus(a, b)
 		a = Range.get_or_make(a)
 		b = Range.get_or_make(b)
-		if not Pos.buf_eq(a, b, 0) or a < b or a > b then return a end
+		if not Pos.buf_eq(a, b, 0) or a < b or b < a then return a end
 		if b:contains(a) then return nil end
 
 		local res = {}
