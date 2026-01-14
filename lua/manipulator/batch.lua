@@ -228,11 +228,11 @@ function Batch:pick(opts)
 	end
 
 	if callback == true then
-		pick = require('manipulator.call_path'):new(nil, { immutable = false, exec_on_call = false })
+		pick = require('manipulator.call_path'):new(nil, { immutable = false, call = { execute = false } })
 		callback = function(result)
 			pick.item = result
 			pick:exec { src = 'update' } -- run the planned execution
-			pick.config.exec_on_call = 10 -- in case the full path hasn't been constructed yet (unlikely)
+			pick.config.call.auto_exec = 10 -- in case the full path hasn't been constructed yet (unlikely)
 		end
 	elseif not callback then
 		co = coroutine.running()

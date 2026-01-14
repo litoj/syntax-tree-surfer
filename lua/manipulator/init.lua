@@ -44,13 +44,12 @@ M.default_config = {
 	call_path = {
 		inherit = false,
 		immutable = true,
-		immutable_args = false,
-		exec_on_call = false,
 
+		call = { on_no_fn = 'error' },
 		exec = {
-			allow_direct_calls = false,
 			allow_field_access = false,
 			skip_anchors = true,
+			skip_empty_motion = true,
 		},
 		as_op = { except = false, return_expr = false },
 		on_short_motion = 'last-or-self',
@@ -60,7 +59,7 @@ M.default_config = {
 		inherit = false,
 
 		jump = { rangemod = { RM.trimmed } },
-		select = { linewise = 'auto' },
+		select = { linewise = 'auto', end_ = true },
 		swap = { visual = true, cursor_with = 'current' },
 
 		current = { fallback = '.', end_shift_ptn = '^$' },
