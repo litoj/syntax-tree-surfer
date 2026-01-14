@@ -16,6 +16,8 @@
       -- or manually list all the types for every language to work
       ts.current{types={'^function_de','^method_de','arrow_function','function'}}:print()
       ```
+    - to see which captures the query provides just create an exception by using an invalid capture
+      - `ts.current{query='textobjects', types={''}}`
 - `CallPath`: flexible & reusable keymapping function builder
 - vim motion support (`5j`…) (via `CallPath:repeatable`)
 - dot repeat + operator mode (via `CallPath:as_op`)

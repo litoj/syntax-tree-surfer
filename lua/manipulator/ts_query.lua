@@ -9,16 +9,17 @@ local M = {}
 --- NOTE: When passing in the raw query string, you probably don't want to filter by node types.
 ---@param filter fun(node:TSNode):boolean
 ---@param ltree vim.treesitter.LanguageTree NOTE: presumes the tree is the root tree -> 1 TSTree
----@param query string string of the actual query or a predefined group ('textobjects' etc.)
+---@param query_src string string of the actual query or a predefined group ('textobjects' etc.)
 ---@param captures manipulator.Enabler which capture groups should we collect
 ---@return TSNode[]
-function M.get_all(filter, ltree, query, captures)
+function M.get_all(filter, ltree, query_src, captures)
 	-- TODO: to make it usable as a general alternate traversal
 	-- 1. detect changes in buffer and invalidate cache after change
 	-- 2. get and cache all nodes matching query with the metadata in some processable format
 
-	local query = query:match '[^a-z0-9]' and vim.treesitter.query.parse(ltree:lang(), query)
-		or vim.treesitter.query.get(ltree:lang(), query)
+	local query = query_src:match '[^a-z0-9]' and vim.treesitter.query.parse(ltree:lang(), query_src)
+		or vim.treesitter.query.get(ltree:lang(), query_src)
+	if not query then error('Invalid query group: ' .. query_src) end
 
 	local accepts = {}
 	for i, c in ipairs(query.captures) do
