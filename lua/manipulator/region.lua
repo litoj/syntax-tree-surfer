@@ -278,29 +278,21 @@ function Region:mark(char, opts)
 end
 
 ---@class manipulator.Region.jump.Opts: manipulator.Region.rangemod.Opts,manipulator.range_mods.end_shift.Opts
----@field insert? boolean enter insert mode and adjust the range end for it (default: false)
----@field end_? boolean jump to the end? (or start of the range - default)
+---@field end_? boolean jump to the end? (default: false = jump to the start of the range)
 
 --- Jump to the start (or end, if `opts.end_`) of the region.
 ---@param opts? manipulator.Region.jump.Opts|string opts and modifications of the jump location
 function Region:jump(opts)
 	opts = self:action_opts(opts, 'jump')
 
-	-- TODO: test how going insert before the correct location affects the undo position
-	if opts.insert then vim.cmd.startinsert() end
-
 	Range.jump({
 		buf = self.buf,
-		range = Region.rangemod(self, opts, { shift_mode = 'insert', RM.end_shift }),
+		range = Region.rangemod(self, opts, { shift_mode = 'insert', rangemod = RM.end_shift }),
 	}, opts.end_)
 end
 
 ---@class manipulator.Region.select.Opts: manipulator.Region.jump.Opts,manipulator.range_mods.linewise.Opts
---- If coming from insert mode:
---- - `temporary-visual`: return to insert mode after the selection is finished
---- - `visual`: exit insert mode and start a normal visual selection (default)
---- - `select`: enter select mode
----@field from_insert? 'temporary-visual'|'visual'|'select'
+---@field return_to_insert? boolean if coming from insert mode, should we return to it afterwards
 
 --- Select node in visual/select mode.
 ---@param opts? manipulator.Region.select.Opts|string
@@ -313,30 +305,21 @@ function Region:select(opts)
 	if U.validate_mode 'visual' then end_ = not select(2, Range.from('v', '.')) end
 
 	local c_mode = vim.fn.mode()
-	local text_mode = RM.evaluate_linewise(r, opts) and 'V' or 'v'
-	if c_mode ~= text_mode then
-		if c_mode == 'i' then
-			if opts.from_insert == 'temporary-visual' then
-				local v = end_ and r or r:end_(true)
-				local c = end_ and r:end_(true) or r
-				vim.api.nvim_feedkeys(
-					('\015%s%dgg0%d o%dgg0%d '):format(text_mode, v[1] + 1, v[2], c[1] + 1, c[2]),
-					'n',
-					false
-				)
-				return
-			elseif opts.from_insert ~= 'select' then
+	local sel_mode = RM.evaluate_linewise(r, opts) and 'V' or 'v'
+	if c_mode ~= sel_mode then
+		if c_mode == 'i' or c_mode == 's' or c_mode == 'S' then
+			if opts.return_to_insert then
+				vim.api.nvim_feedkeys('\015', 'n', false)
+			else
 				vim.cmd.stopinsert()
+				r[4] = r[4] + 1
 			end
-			r[4] = r[4] + 1
-		else
-			vim.cmd.normal { bang = true, args = { '\027' } }
 		end
-		vim.cmd.normal { bang = true, args = { text_mode } }
+		vim.cmd.normal { bang = true, args = { sel_mode } }
 	end
 
 	Range.jump(r, not end_)
-	vim.cmd.normal 'o'
+	vim.cmd 'normal! o'
 	Range.jump(r, end_)
 end
 

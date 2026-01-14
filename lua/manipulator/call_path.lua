@@ -162,8 +162,12 @@ function CallPath:__index(key)
 
 		error('Unknown anchor ' .. k1)
 	else -- path addition
-		self:_add_to_path { fn = key, on_short_motion = self.next_as_motion }
-		self.next_as_motion = false
+		if self.next_as_motion then -- set `on_short_motion` only if valuable -> avoid writing `false`
+			self:_add_to_path { fn = key, on_short_motion = self.next_as_motion }
+			self.next_as_motion = false
+		else
+			self:_add_to_path { fn = key }
+		end
 
 		if key == 'pick' then self.needs_coroutine = true end -- `Batch.pick` direct integration
 	end

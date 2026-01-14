@@ -60,7 +60,7 @@ M.default_config = {
 		inherit = false,
 
 		jump = { rangemod = { RM.trimmed } },
-		select = { linewise = 'auto', end_ = true },
+		select = { linewise = 'auto' },
 		swap = { visual = true, cursor_with = 'current' },
 
 		current = { fallback = '.', end_shift_ptn = '^$' },

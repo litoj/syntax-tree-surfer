@@ -109,6 +109,22 @@ function M.tbl_inner_extend(mode, t1, t2, depth, deep_copy)
 	return t1
 end
 
+---@generic T
+---@param tbl `T`
+---@param parts string[]
+---@return T
+function M.tbl_partcopy(tbl, parts)
+	local ret = {}
+	for _, p in ipairs(parts) do
+		if type(tbl[p]) == 'table' then
+			ret[p] = vim.deepcopy(tbl[p], true)
+		else
+			ret[p] = tbl[p]
+		end
+	end
+	return ret
+end
+
 ---@alias manipulator.VisualMode 'v'|'V'|'\022'|'s'|'S'|'\019'
 ---@alias manipulator.VisualModeEnabler table<manipulator.VisualMode, true>
 

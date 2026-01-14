@@ -66,7 +66,7 @@ TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 local M = U.get_static(TS, {})
 
 function M.activate_enablers(opts)
-	if opts.types then U.activate_enabler(opts.types, '[^a-z_@.]') end
+	if opts.types then U.activate_enabler(opts.types, '[^a-z0-9_.]') end
 	if type(opts.langs) == 'table' then U.activate_enabler(opts.langs) end
 	return opts
 end
@@ -110,8 +110,8 @@ end
 function TS:action_opts(opts, action)
 	local save_as = opts and opts.save_as
 	if save_as then
-		---@diagnostic disable-next-line: assign-type-mismatch, undefined-field, need-check-nil
-		M.config.presets[save_as] = action and { types = opts.types, langs = opts.langs, [action] = opts } or opts
+		---@diagnostic disable-next-line: assign-type-mismatch
+		M.config.presets[save_as] = action and U.tbl_partcopy(opts, { 'types', 'langs', 'query', action }) or opts
 	end
 
 	opts = M.activate_enablers(U.expand_action(self.config or get_lang_preset(

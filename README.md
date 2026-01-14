@@ -17,7 +17,7 @@
       ts.current{types={'^function_de','^method_de','arrow_function','function'}}:print()
       ```
 - `CallPath`: flexible & reusable keymapping function builder
-- vim motion support (`5j`…) (via `CallPath:with_count`)
+- vim motion support (`5j`…) (via `CallPath:repeatable`)
 - dot repeat + operator mode (via `CallPath:as_op`)
 - `Batch`: collecting and selecting (native or `fzf`) found matches
 - extensive behaviour configuration with clever preset inheriting
