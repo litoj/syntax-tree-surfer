@@ -78,7 +78,8 @@ function M.get_or(val, default)
 	return val
 end
 
---- Extend {t1} directly without creating a copy. Number-indexed values get appended!
+--- Extend {t1} directly without creating a copy.
+--- NOTE: Number-indexed values get set if nil, otherwise **appended**!
 ---@param mode 'keep'|'force' if t1 attributes can get overriden by t2
 ---@param t1 table
 ---@param t2 table
@@ -95,15 +96,13 @@ function M.tbl_inner_extend(mode, t1, t2, depth, deep_copy)
 	end
 
 	for k, v2 in pairs(t2) do
-		if type(k) == 'number' and type(v2) ~= 'table' then
+		local v1 = t1[k]
+		if depth > 0 and type(v1) == 'table' and type(v2) == 'table' then
+			t1[k] = M.tbl_inner_extend(mode, v1, v2, depth - 1, deep_copy)
+		elseif v1 == nil or mode == 'force' then
+			t1[k] = type(v2) == 'table' and deep_copy and vim.deepcopy(v2, deep_copy == 'noref') or v2
+		elseif type(k) == 'number' then
 			table.insert(t1, v2)
-		else
-			local v1 = t1[k]
-			if depth > 0 and type(v1) == 'table' and type(v2) == 'table' then
-				t1[k] = M.tbl_inner_extend(mode, v1, v2, depth - 1, deep_copy)
-			elseif v1 == nil or mode == 'force' then
-				t1[k] = type(v2) == 'table' and deep_copy and vim.deepcopy(v2, deep_copy == 'noref') or v2
-			end
 		end
 	end
 	return t1

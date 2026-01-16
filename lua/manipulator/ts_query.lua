@@ -62,6 +62,8 @@ M.comparators = {
 	bottom = function(a, b) return Range.cmp_containment(b, a) > 0 end,
 	bottom_left = function(a, b) return Range.cmp_end(a, b) < 0 or Range.contains(b, a) end,
 	bottom_right = function(a, b) return Range.cmp_end(b, a) < 0 or Range.contains(b, a) end,
+	left = function(a, b) return Range.cmp_end(a, b) < 0 end,
+	right = function(a, b) return Range.cmp_end(b, a) < 0 end,
 }
 
 ---@param nodes TSNode[]

@@ -58,7 +58,7 @@ M.default_config = {
 	region = {
 		inherit = false,
 
-		jump = { rangemod = { RM.trimmed } },
+		jump = { rangemod = { [10] = RM.trimmed } },
 		select = { linewise = 'auto', end_ = true },
 		swap = { visual = true, cursor_with = 'current' },
 
@@ -116,7 +116,7 @@ M.default_config = {
 
 				types = { 'definition$', 'declaration$', '.*comment.*', '.*asignment.*' },
 				select = { -- what can we apply the mod to
-					rangemod = { inherit = true, RM.with_docs },
+					rangemod = { inherit = true, [10] = RM.with_docs }, -- specific index to make it last
 					langs = { inherit = true, matchers = { ['.*doc.*'] = false } },
 				},
 				-- which preceeding nodes can join the selection (docs/comments)

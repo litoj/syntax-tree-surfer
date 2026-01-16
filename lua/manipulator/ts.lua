@@ -123,7 +123,7 @@ function TS:action_opts(opts, action)
 	-- ensure it doesn't get inherited, but stays in the user opts for reuse
 	if not save_as then opts.save_as = nil end
 
-	if M.config.debug then
+	if action and M.config.debug then
 		local presets = opts.presets
 		opts.presets = nil
 		if package.loaded['reform'] then
@@ -209,17 +209,17 @@ function TS:parent(opts)
 end
 
 --- Get a child node.
----@param opts? manipulator.TS.QueryOpts|string
 ---@param idx? integer|Range4|'closer_edge' child index
 --- - `<0` for reverse indexing, or a range it should contain
 --- - `'closer_edge'` to choose from the end closer to the cursor (default)
+---@param opts? manipulator.TS.QueryOpts|string
 ---@return manipulator.TS? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
-function TS:child(opts, idx)
-	if type(opts) == 'number' or opts == 'closer_edge' then
-		if idx then error('incorrect order of arguments to TS:child: ' .. vim.inspect { opts = opts, idx = idx }) end
-		idx = opts
-		opts = nil
+function TS:child(idx, opts)
+	if type(idx) == 'table' and not idx[1] then
+		---@diagnostic disable-next-line: cast-local-type
+		opts = idx
+		idx = nil
 	end
 
 	opts = self:action_opts(opts, 'child')

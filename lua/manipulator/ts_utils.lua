@@ -221,13 +221,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
 		if opts.query then
-			return TQ.sorted(
-				TQ.get_all(ok_range, ltree, opts.query, opts.types),
-				function(a, b) return cmp_fn(a) > cmp_fn(b) end,
-				true,
-				true
-			),
-				ltree
+			return TQ.sorted(TQ.get_all(ok_range, ltree, opts.query, opts.types), TQ.comparators.right, true), ltree
 		end
 
 		while continue() do
@@ -257,13 +251,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 		ok_range = function(node) return select(3, cmp_fn(node)) > base_point end
 
 		if opts.query then
-			return TQ.sorted(
-				TQ.get_all(ok_range, ltree, opts.query, opts.types),
-				function(a, b) return cmp_fn(a) < cmp_fn(b) end,
-				true,
-				true
-			),
-				ltree
+			return TQ.sorted(TQ.get_all(ok_range, ltree, opts.query, opts.types), TQ.comparators.left, true), ltree
 		end
 
 		while continue() do

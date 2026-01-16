@@ -155,7 +155,7 @@ function M.with_docs(self, opts)
 
 	local s, e = old.range, self.range
 	if prev_opts.types[self.node:type()] then -- if we are the comment to which we'd expand
-		old, new = self, self:next_sibling 'with_docs'
+		old, new = self, self:next_sibling(prev_opts)
 		-- include all comments bellow
 		while new and new.range[1] - 1 == old.range[3] and M.evaluate_linewise(new, lw_opts) do
 			old = new

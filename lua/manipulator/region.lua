@@ -90,9 +90,6 @@ end
 
 ---@alias RangeMod (fun(self:manipulator.Range,opts):manipulator.Range)|'start'|'end'
 ---@class manipulator.Region.rangemod.Opts
---- What to base the calculations off of (default: self) - pre-processor
---- - usually used for `'start'|'end'` or to set a new absolute `Range4` (`false` for `self`)
----@field base? false|'start'|'end'|anypos
 --- Transform the range of the region before manipulation (i.e. include comma after the text etc.)
 --- Signle or multiple RangeMod functions taking `(self,opts)` into `Range4`
 ---@field rangemod? false|RangeMod|RangeMod[]
@@ -104,23 +101,19 @@ end
 ---@return manipulator.Range
 function Region:rangemod(opts, postprocess)
 	local o_r = self.range
-	local r = opts.base or (type(postprocess) == 'table' and postprocess.base) or Range.get_or_make(self)
-	if type(r) == 'string' then
-		r = self.range[r ~= 'start' and 'end_' or r](self)
-	else
-		r = Range.get_or_make(r)
-	end
+	local r = Range.get_or_make(self)
 
-	for _, batch in ipairs { opts.rangemod, postprocess } do
+	for _, batch in ipairs { opts.rangemod, postprocess and postprocess.rangemod or postprocess } do
 		-- merging to pass postprocess options to the user
 		if batch == postprocess and type(postprocess) == 'table' then
 			opts = U.tbl_inner_extend('keep', postprocess, opts)
 		end
 
-		for _, v in ipairs(type(batch) == 'table' and batch or { batch or nil }) do
+		-- pairs() takes arrays in order, but also continues over holes
+		for _, v in pairs(type(batch) == 'table' and batch or { batch or nil }) do
 			self.range = r
 			if type(v) == 'string' then
-				r = Region[v ~= 'start' and 'end_' or v](r)
+				r = Region[v == 'start' and 'start' or 'end_'](r)
 			else
 				r = v(self, opts)
 			end
@@ -376,7 +369,7 @@ function Region:paste(opts)
 	}, r:get_real_buf(), 'utf-8')
 
 	return self:mod {
-		base = r,
+		rangemod = function() return r end,
 		text = text,
 		text_relative = 'start',
 		linewise = not not opts.linewise,
