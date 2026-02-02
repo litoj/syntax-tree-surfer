@@ -96,19 +96,17 @@ end
 
 --- Apply various modifications to the range, directly modifying the range of self
 ---@param opts manipulator.Region.rangemod.Opts|table
----@param postprocess? manipulator.Region.rangemod.Opts|table|RangeMod|RangeMod[] final modifications specific to the caller action
+---@param postprocess? manipulator.Region.rangemod.Opts|table final modifications specific to the caller action
 --- - usually used for `'start'|'end'` or a last rangemod (linewise, trim, endshift, etc.)
 ---@return manipulator.Range
 function Region:rangemod(opts, postprocess)
 	local o_r = self.range
 	local r = Range.get_or_make(self)
 
-	for _, batch in ipairs { opts.rangemod, postprocess and postprocess.rangemod or postprocess } do
-		-- merging to pass postprocess options to the user
-		if batch == postprocess and type(postprocess) == 'table' then
-			opts = U.tbl_inner_extend('keep', postprocess, opts)
-		end
-
+	-- merging to pass postprocess options to the user
+	if postprocess then U.tbl_inner_extend('keep', postprocess, opts) end
+	for _, opts in ipairs { opts, postprocess } do
+		local batch = opts.rangemod
 		-- pairs() takes arrays in order, but also continues over holes
 		for _, v in pairs(type(batch) == 'table' and batch or { batch or nil }) do
 			self.range = r
@@ -553,32 +551,38 @@ end
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
-	local expr = opts.src
 	local r, mode
-	if expr == 'operator' or (not expr and vim.g.manip_opmode) then
-		expr = 'operator'
-		r = Range.from("'[", "']")
-		mode = vim.g.manip_opmode == 'linewise' and 'V' or 'v'
-	elseif not expr or expr == 'visual' or type(expr) == 'table' then
-		expr = expr or 'visual'
-		if U.validate_mode(expr) then
-			r, mode = Range.from('v', '.')
-			if mode == true then -- cursor is at the beginning -> check select mode and prevent range fix
-				mode = vim.fn.mode()
-				mode = mode == 'S' and 'V' or (mode == 's' and 'v') or mode
-			else
-				mode = vim.fn.mode()
+	local function findRange(expr)
+		if expr == 'operator' or (not expr and vim.g.manip_opmode) then
+			expr = 'operator'
+			r = Range.from("'[", "']")
+			mode = vim.g.manip_opmode == 'linewise' and 'V' or 'v'
+		elseif not expr or expr == 'visual' or type(expr) == 'table' then
+			expr = expr or 'visual'
+			if U.validate_mode(expr) then
+				r, mode = Range.from('v', '.')
+				if mode == true then -- cursor is at the beginning -> ensure correct shift in select mode
+					mode = vim.fn.mode()
+					mode = mode == 'S' and 'V' or (mode == 's' and 'v') or mode
+				else
+					mode = vim.fn.mode()
+				end
 			end
+		else
+			r = Range.from(expr)
+			if vim.fn.mode() == 'i' then r[4] = r[4] - 1 end -- correct to 0-width
 		end
-	else
-		r = Range.from(expr)
 	end
 
+	findRange(opts.src)
+	local expr = r and opts.src or opts.fallback
 	if not r then
-		expr = opts.fallback
 		if not expr then error('No fallback for failed src: ' .. vim.inspect(opts.src)) end
-		r = type(expr) == 'table' and Range.get_or_make(expr) or Range.from(expr)
-		if type(expr) == 'table' then mode = 'fallback_range' end
+		if type(expr) == 'table' then
+			r, mode = Range.get_or_make(expr), 'fallback_range'
+		else
+			findRange(expr)
+		end
 	end
 
 	---@diagnostic disable-next-line: missing-fields
