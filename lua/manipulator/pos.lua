@@ -34,7 +34,7 @@ do -- ### Producers
 	function Pos.get_or_make(p) return getmetatable(p) == Pos and p or Pos.new(p) end
 
 	---@alias pos_expr 'mouse'|'.'|'v'|"'["|"']"|"'<"|"'>"|"'j"|"'d"
-	---@alias pos_src pos_expr|anypos
+	---@alias pos_src anypos|pos_expr
 
 	--- Get a Pos object created from the position of the given mark or just a wrap of the range.
 	--- _Note: Doesn't create a new object if `src` is already a Pos_

@@ -155,13 +155,11 @@ function Region:mod(opts)
 	if lw == 'last_nl' then lw = text:sub(#text) == '\n' end
 
 	if not opts.keep_last_nl and text:sub(#text) == '\n' then text = text:sub(1, #text - 1) end
-	local lines = vim.split(text, '\n')
-	if opts.text_relative == 'start' then
-		r[3] = r[1] + (#lines - 1)
-		r[4] = (#lines == 1 and r[2] or 0) + (#lines[#lines] - 1)
-	elseif opts.text_relative == 'end' then
-		r[1] = r[3] - (#lines - 1)
-		r[2] = (#lines == 1 and (r[4] - (#lines[#lines] - 1)) or 0)
+	local lines
+	if opts.text_relative then
+		r, lines = Range.from_text(text, opts.text_relative, r)
+	else
+		lines = vim.split(text, '\n')
 	end
 
 	if lw then r = RM.linewise(r, opts, lw) end

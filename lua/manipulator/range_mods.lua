@@ -102,15 +102,15 @@ function M.trimmed(self, opts)
 	return r
 end
 
----@class manipulator.range_mods.end_shift.Opts
----@field end_shift_ptn? string luapat to determine if a by-one shift in position should be done
----@field shift_point_range? boolean shift also the start of a single-char-wide range
---- How to manipulate the matching end
---- - 1 to add the matching end, -1 to exclude it from the range (default)
---- - `'insert'`: -1 if matching, and on top always add 1 if we're in insert/select mode
----@field shift_mode? 'insert'|1|-1
-
 do -- end_shift with adjustment for insert mode
+	---@class manipulator.range_mods.end_shift.Opts
+	---@field end_shift_ptn? string luapat to determine if a by-one shift in position should be done
+	---@field shift_point_range? boolean shift also the start of a single-char-wide range
+	--- How to manipulate the matching end
+	--- - 1 to add the matching end, -1 to exclude it from the range (default)
+	--- - `'insert'`: -1 if matching, and on top always add 1 if we're in insert/select mode
+	---@field shift_mode? 'insert'|1|-1
+
 	local insert_modes = { i = 1, s = 1, S = 1 }
 
 	--- Shift the end by -1 if EOL is selected or the char falls under `opts.endfix`.
@@ -132,6 +132,47 @@ do -- end_shift with adjustment for insert mode
 		r[4] = r[4] + col
 		return r
 	end
+end
+
+---@class manipulator.range_mods.pos_shift.Opts
+---@field shift_backward? boolean go before or after the collective match
+---@field shift_by_luapat string pattern to match the space to be ignored - move to the edge of it
+---@field shift_modes manipulator.Enabler which modes to apply to (default: all modes)
+
+--- Shift the range if it is at most 1-char wide.
+---@param r anyrange
+---@param opts manipulator.range_mods.pos_shift.Opts
+---@return manipulator.Range point returns `Range2` if `self` was `Range2`
+function M.pos_shift(r, opts)
+	r = Range.get_or_make(r)
+	local size = r:size()
+	if size[1] ~= 0 or size[2] > 1 or not opts.shift_modes[vim.fn.mode()] then return r end
+
+	local line = r:get_line()
+
+	local from, to, s, e = 0, 0, 0, 0
+	while true do
+		from, to = line:find(opts.shift_by_luapat, (e or to) + 1)
+		if not from then break end
+
+		-- build a collective match (range of all matches touching one another)
+		s, e = from, to
+		while s and to + 1 >= s do -- end of last connects to start of current
+			to = e
+			s, e = line:find(opts.shift_by_luapat, e + 1)
+		end
+
+		if from - 1 <= r[2] and r[4] < to then -- if 0-indexed is contained in 1-indexed
+			-- adjust to 0-indexed and move behind (or in front of) the match
+			if opts.shift_backward then to = from <= 1 and 0 or from - 2 end
+
+			r[4] = r[4] - r[2] + to
+			r[2] = to
+			break
+		end
+	end
+
+	return r
 end
 
 ---@param self manipulator.TS

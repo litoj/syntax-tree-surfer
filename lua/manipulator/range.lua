@@ -54,6 +54,25 @@ do -- ### Producers
 		from[4] = to[2]
 		return Range.new(from), swapped
 	end
+
+	---@param text string
+	---@param relative_to 'start'|'end' where to attach the text to
+	---@param r? anyrange base range to adjust to the text size
+	---@return manipulator.Range
+	---@return string[]
+	function Range.from_text(text, relative_to, r)
+		r = Range.new(r)
+
+		local lines = vim.split(text, '\n')
+		if relative_to == 'start' then
+			r[3] = r[1] + (#lines - 1)
+			r[4] = (#lines == 1 and r[2] or 0) + (#lines[#lines] - 1)
+		else
+			r[1] = r[3] - (#lines - 1)
+			r[2] = (#lines == 1 and (r[4] - (#lines[#lines] - 1)) or 0)
+		end
+		return r, lines
+	end
 end
 
 do -- ### Getters / Actions
@@ -119,6 +138,7 @@ do -- ### Getters / Actions
 		return as_pos and r or Range.new(r)
 	end
 
+	---@param a anyrange
 	---@return manipulator.Pos
 	function Range.size(a)
 		a = Range.get_or_make(a)
