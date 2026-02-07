@@ -21,6 +21,10 @@ function NodeBatch.__index(tbl, idx)
 
 	return ret
 end
+--[[ function NodeBatch.__tostring()
+	local types={}
+	fo
+end ]]
 function NodeBatch:start() return unpack(self.s) end
 function NodeBatch:end_() return unpack(self.e) end
 function NodeBatch:range() return self.s[1], self.s[2], self.e[1], self.e[2] end

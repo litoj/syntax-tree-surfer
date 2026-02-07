@@ -9,12 +9,15 @@
   - filtering by node type & lang
   - selection possible with dynamic modifiers -> select fn with docs etc.
   - matching structures using query syntax and catching into groups
-    - NOTE: this is meant for more complex, or language-agnostic matching
-    - example: select a function
+    - this is meant for more complex, or language-agnostic matching, that would be very difficult to
+      replicate with just single-node matching
+    - example: select all docs and annotations of current C# method
       ```lua
-      ts.current{query='textobjects', types={'@function.outer'}, langs=false}:print()
-      -- or manually list all the types for every language to work
-      ts.current{types={'^function_de','^method_de','arrow_function','function'}}:print()
+      ts.current({ langs = false, query = [[(method_declaration (block) @body)]] })
+      	:prev({
+      		query = [[((comment)+ . (method_declaration (attribute_list)* @docs)) @docs]],
+      		types = { '@docs' },
+      	}):select()
       ```
     - to see which captures the query provides just create an exception by using an invalid capture
       - `ts.current{query='textobjects', types={''}}`

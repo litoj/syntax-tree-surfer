@@ -348,8 +348,8 @@ function M.get(range, opts)
 	r[4] = r[4] + 1 -- NOTE: TSNode:range() is end exclusive
 	local ret
 	if opts.query then
-		r, ltree = TQ.get_ancestor(r, ltree, opts, true, true)
-		ret = TS:new(r, ltree, opts)
+		local nodes, ltree = TQ.get_ancestor(r, ltree, opts, true, true)
+		ret = TS:new(nodes, ltree, opts)
 	else
 		if opts.langs then ltree = ltree:language_for_range(r) end
 		ret = TS:new(ltree:named_node_for_range(r), ltree, opts)

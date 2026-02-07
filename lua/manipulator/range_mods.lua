@@ -223,18 +223,4 @@ function M.with_docs(self, opts)
 	return { s[1], s[2], e[3], e[4] }
 end
 
----@param self manipulator.TS
----@return manipulator.TS
-function M.until_new_pos(self, action, end_, ...)
-	if not self.buf then return self end
-	action = require('manipulator.batch').action_to_fn(action, ...)
-	local getCmp = self.range[end_ and 'end_' or 'start']
-	local pos = getCmp(self.range, true)
-	while self.buf and getCmp(self.range, true) == pos do
-		self = action(self)
-	end
-
-	return self
-end
-
 return M
