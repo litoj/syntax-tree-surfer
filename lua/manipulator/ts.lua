@@ -66,7 +66,7 @@ TS.action_map = U.tbl_inner_extend('keep', Region.action_map, {
 local M = U.get_static(TS, {})
 
 function M.activate_enablers(opts)
-	if opts.types then U.activate_enabler(opts.types, '[^a-z0-9_.]') end
+	if opts.types then U.activate_enabler(opts.types, '[^@a-z0-9_.]') end
 	if type(opts.langs) == 'table' then U.activate_enabler(opts.langs) end
 	return opts
 end
@@ -184,11 +184,6 @@ function TS:__tostring()
 	return string.format('%s: %s', self.node and self.node:type() or 'invalid', TS.super.__tostring(self))
 end
 
----@class manipulator.TS.QueryOpts: manipulator.TS.Opts
---- Query which we use to filter the types (default: false - filters by raw node types).
---- Either the category to load, or custom query to filter by
----@field query? false|string|'highlights'|'textobjects'|'locals'
-
 --- Get a parent node.
 ---@param opts? manipulator.TS.QueryOpts|string
 ---@return manipulator.TS? node from the given direction
@@ -196,12 +191,9 @@ end
 function TS:parent(opts)
 	opts = self:action_opts(opts, 'parent')
 
-	if opts.query then -- XXX: assumes we're in the top ltree
-		return self:new(
-			TQ.get_ancestor({ self.node:range() }, self.ltree, opts.query, opts.types, true, false),
-			self.ltree,
-			opts
-		)
+	if opts.query then
+		local node, ltree = TQ.get_ancestor({ self.node:range() }, self.ltree, opts, true, false)
+		return self:new(node, ltree, opts)
 	end
 
 	local node, ltree = TU.get_identical_ancestor(opts, self.node, self.ltree, true)
@@ -356,7 +348,8 @@ function M.get(range, opts)
 	r[4] = r[4] + 1 -- NOTE: TSNode:range() is end exclusive
 	local ret
 	if opts.query then
-		ret = TS:new(TQ.get_ancestor(r, ltree, opts.query, opts.types, true, true), ltree, opts)
+		r, ltree = TQ.get_ancestor(r, ltree, opts, true, true)
+		ret = TS:new(r, ltree, opts)
 	else
 		if opts.langs then ltree = ltree:language_for_range(r) end
 		ret = TS:new(ltree:named_node_for_range(r), ltree, opts)

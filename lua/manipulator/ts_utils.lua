@@ -177,11 +177,8 @@ function M.get_descendant(opts, node, ltree, idx)
 	if opts.query then -- TODO: implement a version working for a specific index
 		local base_range = { node:range() }
 		local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) > 0 end
-		return TQ.sorted(
-			TQ.get_all(filter, ltree, opts.query, opts.types),
-			idx == 0 and TQ.comparators.top_left or TQ.comparators.top_right,
-			true
-		)
+		node, ltree = TQ.get_all(filter, ltree, opts)
+		return TQ.sorted(node, idx == 0 and TQ.comparators.top_left or TQ.comparators.top_right, true), ltree
 	end
 
 	return find_valid_descendant(opts, child, ltree, idx, node)
@@ -206,7 +203,7 @@ function M.search_in_graph(direction, opts, node, ltree)
 	local max_depth = opts.max_descend or vim.v.maxcol
 	local min_shared = -(opts.max_link_dst or vim.v.maxcol)
 	local min_depth = -(opts.max_ascend or vim.v.maxcol)
-	local cmp_fn = opts.compare_end and node.end_ or node.start
+	local cmp_fn = opts.compare_end and function(n) return n:end_() end or function(n) return n:start() end
 
 	local o_range = { node:range() }
 	local depth = 0
@@ -221,7 +218,8 @@ function M.search_in_graph(direction, opts, node, ltree)
 		ok_range = function(node) return select(3, cmp_fn(node)) < base_point end
 
 		if opts.query then
-			return TQ.sorted(TQ.get_all(ok_range, ltree, opts.query, opts.types), TQ.comparators.right, true), ltree
+			node, ltree = TQ.get_all(ok_range, ltree, opts)
+			return TQ.sorted(node, TQ.comparators.right, true), ltree
 		end
 
 		while continue() do
@@ -251,7 +249,8 @@ function M.search_in_graph(direction, opts, node, ltree)
 		ok_range = function(node) return select(3, cmp_fn(node)) > base_point end
 
 		if opts.query then
-			return TQ.sorted(TQ.get_all(ok_range, ltree, opts.query, opts.types), TQ.comparators.left, true), ltree
+			node, ltree = TQ.get_all(ok_range, ltree, opts)
+			return TQ.sorted(node, TQ.comparators.left, true), ltree
 		end
 
 		while continue() do

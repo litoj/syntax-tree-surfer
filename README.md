@@ -12,7 +12,7 @@
     - NOTE: this is meant for more complex, or language-agnostic matching
     - example: select a function
       ```lua
-      ts.current{query='textobjects', types={'function.outer'}}:print()
+      ts.current{query='textobjects', types={'@function.outer'}, langs=false}:print()
       -- or manually list all the types for every language to work
       ts.current{types={'^function_de','^method_de','arrow_function','function'}}:print()
       ```
