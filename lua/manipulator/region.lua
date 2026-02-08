@@ -260,16 +260,21 @@ end
 
 ---@class manipulator.Region.jump.Opts: manipulator.Region.rangemod.Opts,manipulator.range_mods.end_shift.Opts
 ---@field end_? boolean jump to the end? (default: false = jump to the start of the range)
+---@field start_insert? boolean should we enter insert mode
 
 --- Jump to the start (or end, if `opts.end_`) of the region.
 ---@param opts? manipulator.Region.jump.Opts|string opts and modifications of the jump location
 function Region:jump(opts)
 	opts = self:action_opts(opts, 'jump')
 
-	Range.jump({
-		buf = self.buf,
-		range = Region.rangemod(self, opts, { shift_mode = 'insert', rangemod = RM.end_shift }),
-	}, opts.end_)
+	local r = Region.rangemod(self, opts, { shift_mode = 'insert', rangemod = RM.end_shift })
+
+	if opts.end_ and (opts.start_insert or vim.fn.mode() == 'i') then
+		vim.cmd.startinsert()
+		r[4] = r[4] + 1
+	end
+
+	Range.jump({ buf = self.buf, range = r }, opts.end_)
 end
 
 ---@class manipulator.Region.select.Opts: manipulator.Region.jump.Opts,manipulator.range_mods.linewise.Opts
@@ -318,6 +323,11 @@ function Region:paste(opts)
 	local r = Range.get_or_make(opts.dst or self)
 
 	local text = opts.text
+	if text and opts.dst and self.range then
+		vim.notify 'Attempt to paste custom text to custom location completely ignoring the node.'
+		return self.Nil
+	end
+
 	if not text and opts.dst then
 		text = self:get_text()
 	elseif not text or text:match '^".$' then
