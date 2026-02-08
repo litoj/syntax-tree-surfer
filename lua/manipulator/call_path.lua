@@ -377,8 +377,11 @@ function CallPath:_exec(opts)
 				item = fn(item, unpack(call.args or {}))
 			else -- ### vim motion - run for multiple iterations
 				local Batch = require 'manipulator.batch'
-				local batch =
-					Batch.from_recursive(item, vim.v.count1, Batch.action_to_fn(call.fn, unpack(call.args or {})))
+				local batch = Batch.collect(
+					item,
+					{ inherit = false, limit = vim.v.count1 },
+					Batch.action_to_fn(call.fn, unpack(call.args or {}))
+				)
 
 				local len = batch:length()
 				if len == vim.v.count1 then

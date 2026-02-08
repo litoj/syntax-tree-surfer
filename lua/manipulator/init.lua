@@ -38,7 +38,9 @@ M.default_config = {
 			callback = false,
 		},
 
-		recursive_limit = 500,
+		collect = {
+			limit = 500,
+		},
 	},
 
 	call_path = {

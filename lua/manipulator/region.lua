@@ -167,25 +167,16 @@ function Region:mod(opts)
 	return Region:new { range = r, buf = self.buf, text = text, lines = lines }
 end
 
----@param limit_or_fn? integer|manipulator.Batch.Action max iterations per action (-1= `M.config.recursive_limit`)
+---@see manipulator.Batch.module.collect
+---@param opts_or_fn? manipulator.Batch.module.collect.Opts|manipulator.Batch.Action opts or action
 ---@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
 ---@return manipulator.Batch
-function Region:collect(limit_or_fn, ...)
-	local limit = type(limit_or_fn) == 'number' and limit_or_fn or (not limit_or_fn and -1)
-	if limit then
-		return Batch.from_recursive(self, limit_or_fn, ...)
+function Region:collect(opts_or_fn, ...)
+	if type(opts_or_fn) == 'table' and not getmetatable(opts_or_fn) then
+		return Batch.collect(self, opts_or_fn, ...)
 	else
-		return Batch.from_recursive(self, -1, limit_or_fn, ...)
+		return Batch.collect(self, nil, opts_or_fn, ...)
 	end
-end
-
----@param ... manipulator.Batch.Action item method sequences to apply and collect the result of
----@return manipulator.Batch
-function Region:to_batch(...)
-	if not select(1, ...) then
-		return Batch.from(self, function() return self end)
-	end
-	return Batch.from(self, ...)
 end
 
 Region.get_lines = Range.get_lines
@@ -230,7 +221,7 @@ do
 	---@return integer? # id of the created extmark
 	function Region:highlight(group)
 		local r = Range.raw(self)
-		if not group or type(group) == 'number' then
+		if group == false or type(group) == 'number' then
 			local id = group
 				or self.hl_id
 				or U.get_or(
@@ -242,6 +233,7 @@ do
 				vim.api.nvim_buf_del_extmark(self.buf or 0, hl_ns, id)
 				return
 			end
+			return
 		elseif not r[1] then
 			vim.notify('Cannot highlight Nil', vim.log.levels.INFO)
 			return
@@ -575,7 +567,7 @@ function M.current(opts)
 	findRange(opts.src)
 	local expr = r and opts.src or opts.fallback
 	if not r then
-		if not expr then error('No fallback for failed src: ' .. vim.inspect(opts.src)) end
+		if not expr then return Region.Nil end
 		if type(expr) == 'table' then
 			r, mode = Range.get_or_make(expr), 'fallback_range'
 		else

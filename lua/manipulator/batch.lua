@@ -16,9 +16,9 @@ Batch.__index = Batch
 ---@field presets? { [string]: manipulator.Batch.Config }
 
 ---@class manipulator.Batch.module.Config: manipulator.Batch.Config
----@field recursive_limit? integer how many iterations is from_recursive() allowed by default
+---@field from_recursive? manipulator.Batch.module.collect.Opts
 
-Batch.action_map = { pick = true }
+Batch.action_map = { pick = true, from_recursive = false }
 
 ---@class manipulator.Batch.module: manipulator.Batch
 ---@field class manipulator.Batch
@@ -331,42 +331,32 @@ function Batch:pick(opts)
 	return pick
 end
 
----@param src manipulator.Region|{Nil:table|false}
----@param ... manipulator.Batch.Action item method sequences to apply and collect the result of
----@return manipulator.Batch
-function M.from(src, ...)
-	if not src or src == src.Nil then return Batch:new({}, src and src.Nil or false) end
-	local actions = { ... }
-	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
-	local acc = {}
-	local Nil = src.Nil
-
-	for _, action in ipairs(actions) do -- for each action
-		action = M.action_to_fn(action)
-		acc[#acc + 1] = action(src)
-	end
-
-	return Batch:new(acc, Nil)
-end
+---@class manipulator.Batch.module.collect.Opts
+---@field limit? integer|'vimcount' how many iterations can we do in total (across all actions)
+---@field include_src? boolean should the initial item on which the recursion runs be included
 
 ---@param src manipulator.Region|{Nil:table|false}
----@param limit integer|'vimcount' max iterations total (-1= `M.config.recursive_limit`)
----@param ... manipulator.Batch.Action item method sequences to apply recursively and collect node of each iteration
+---@param opts? manipulator.Batch.module.collect.Opts|string
+---@param ... manipulator.Batch.Action list of actions, to individually recursively apply to `src` and collect the result of each iteration
 ---@return manipulator.Batch
-function M.from_recursive(src, limit, ...)
+function M.collect(src, opts, ...)
 	if not src or src == src.Nil then return Batch:new({}, src and src.Nil or false) end
-	limit = limit == -1 and M.config.recursive_limit or (limit == 'vimcount' and vim.v.count1 or limit)
+
+	opts = U.expand_action(M.config, opts, 'collect', Batch.action_map)
+	local limit = opts.limit == 'vimcount' and vim.v.count1 or opts.limit
 	local actions = { ... }
 
 	-- rawget to bypass CallPath modifications
 	if type(actions[1]) == 'table' and rawget(actions[1], 1) then actions = actions[1] end
 	local acc = {}
+	if opts.include_src then acc[1] = src end
 	local Nil = src.Nil
 
 	for _, action in ipairs(actions) do -- for each action
 		action = M.action_to_fn(action)
 		local item = action(src)
-		while item and item ~= Nil and limit > 0 do -- collect nodes while we can apply the action on the consecutive result
+		-- collect nodes while we can apply the action on the consecutive result
+		while item and item ~= Nil and limit > 0 do
 			acc[#acc + 1] = item
 			item = action(item)
 			limit = limit - 1

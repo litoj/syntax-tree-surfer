@@ -336,7 +336,7 @@ end
 
 --- Get a node covering given range.
 ---@param range anypos range that the result node must include
----@param opts manipulator.TS.QueryOpts
+---@param opts? manipulator.TS.QueryOpts|string
 ---@return manipulator.TS?
 function M.get(range, opts)
 	opts = M:action_opts(opts, 'get')
@@ -363,13 +363,13 @@ end
 --- When node is larger than visual selection, what node should we return (default: '.')
 ---@field on_partial? 'larger'|pos_expr|false
 
----@param opts? manipulator.TS.module.current.Opts persistent by default
+---@param opts? manipulator.TS.module.current.Opts|string persistent by default
 ---@return manipulator.TS?
 function M.current(opts)
 	opts = M:action_opts(opts, 'current')
 
 	local reg, visual = Region.current(opts)
-	local ts = M.get(reg, opts) -- get the primary chosen node
+	local ts = reg == Region.Nil and TS.Nil or M.get(reg, opts) -- get the primary chosen node
 
 	-- if selection is smaller than the chosen node decide what to do
 	if (ts and ts.node and visual and opts.on_partial ~= 'larger') and ts.range ~= reg.range then
