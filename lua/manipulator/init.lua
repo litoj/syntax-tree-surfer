@@ -8,6 +8,9 @@ local RM = require 'manipulator.range_mods'
 ---@field call_path manipulator.CallPath.module
 ---@field region manipulator.Region.module
 ---@field ts manipulator.TS.module
+---@field Range manipulator.Range
+---@field Pos manipulator.Pos
+---@field RM manipulator.range_mods
 local M = {}
 
 --- Configs for all submodules, that can have the following sections:
@@ -123,13 +126,14 @@ M.default_config = {
 				},
 				-- which preceeding nodes can join the selection (docs/comments)
 				prev_sibling = { langs = false, types = { '.*comment.*' } },
-				next_sibling = { types = { inherit = 'self' } }, -- do not inherit default (=sibling.types)
+				next_sibling = { types = { inherit = 'self' } }, -- skip inheriting sibling.types
 			},
 
 			-- ### Lang presets (used if .use_lang_presets)
 			markdown = {
 				types = {
 					-- `true` always means _inherit from what parent table inherits (→'active' = base cfg)_
+					-- in setup config, however, you must use the preset name to avoid ambiguity
 					inherit = true,
 					'list_marker_minus',
 					'inline',
@@ -186,6 +190,11 @@ function M.setup(config)
 		)
 		if rawget(m, '_post_setup') then m._post_setup() end
 	end
+
+	-- as class names, because there is no static wrapper
+	M.Range = require 'manipulator.range'
+	M.Pos = require 'manipulator.pos'
+	M.RM = require 'manipulator.range_mods'
 
 	return M
 end

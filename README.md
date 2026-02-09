@@ -26,6 +26,40 @@
 - dot repeat + operator mode (via `CallPath:as_op`)
 - `Batch`: collecting and selecting (native or `fzf`) found matches
 - extensive behaviour configuration with clever preset inheriting
+  - In setup, all configs inherit from their previous version by default. However, to inherit also
+    the previous values of overriden fields, you must set `inherit=<preset name>` in those fields
+    explicitly. The preset name of the base configs is `'active'`.
+    - Example (for the `ts` section):
+      ```lua
+      types = { inherit = 'active', 'list$' }, -- '*' is `true` -> matched nodes will be excluded
+      -- or - to allow luapat to override each other (TODO: order important, currenlty random)
+      types = { inherit = 'active', matchers = { ['list$'] = false } },
+      presets = {
+        -- Filetypes get mapped to TS lang names -> langpresets use the TS parser name
+        latex = {
+          types = { inherit = 'latex', text = true } -- override the default of text being skipped
+        }
+      }
+      ```
+  - In action options, you can change the action inheritance chain by inheriting from an action
+    instead of a preset. Alternatively, you can `inherit='self'` to skip inheriting from configs of
+    parent actions and inherit only from the current node's config.
+    - Example (from the `ts` section):
+      ```lua
+      presets = {
+        with_docs = {
+          next_sibling = { types = { inherit = 'self' } }, -- skip inheriting sibling.types
+        }
+      }
+      ```
+    - To view the inheritance chain of an action, inpect the `action_map` of your module of
+      interest.
+  - During runtime (when passing opts to the actions) fields with `inherit=true` inherit their
+    values from the same preset as the parent table (=the opts).
+    - Example:
+      ```lua
+      opts = { inherit = 'p1', types = { inherit = true --[[will inherit p1.types]] } }
+      ```
 - extensive docs right in the code for all settings and methods
 
 ## TODOS
