@@ -298,7 +298,7 @@ end
 ---@param from_range? anyrange where should the nodes come from (whole buffer by default)
 ---@return manipulator.Batch
 function M.get_all(opts, from_range)
-	opts = M:action_opts(opts, 'get_all')
+	opts = TS:action_opts(opts, 'get_all')
 
 	local r = from_range and Range.get_or_make(from_range)
 	if r then r[4] = r[4] + 1 end
@@ -339,7 +339,7 @@ end
 ---@param opts? manipulator.TS.QueryOpts|string
 ---@return manipulator.TS?
 function M.get(range, opts)
-	opts = M:action_opts(opts, 'get')
+	opts = TS:action_opts(opts, 'get')
 	local r = Range.get_or_make(range)
 
 	local ltree = vim.treesitter.get_parser(r.buf)
@@ -366,7 +366,7 @@ end
 ---@param opts? manipulator.TS.module.current.Opts|string persistent by default
 ---@return manipulator.TS?
 function M.current(opts)
-	opts = M:action_opts(opts, 'current')
+	opts = TS:action_opts(opts, 'current')
 
 	local reg, visual = Region.current(opts)
 	local ts = reg == Region.Nil and TS.Nil or M.get(reg, opts) -- get the primary chosen node

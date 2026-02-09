@@ -549,7 +549,7 @@ end
 --- If the return value is not a point, sends what type of range it is
 --- - can return a falsy value while user is in visual mode
 function M.current(opts)
-	opts = M:action_opts(opts, 'current')
+	opts = Region:action_opts(opts, 'current')
 
 	local r, mode
 	local function findRange(expr)

@@ -30,7 +30,7 @@ function M.evaluate_linewise(self, opts, lw)
 		or false
 end
 
----@see manipulator.range_mods.validate_linewise
+---@see manipulator.range_mods.evaluate_linewise
 ---@param opts manipulator.range_mods.linewise.Opts|table
 ---@return manipulator.Range
 function M.linewise(self, opts, lw)
@@ -177,6 +177,7 @@ end
 
 ---@param self manipulator.TS
 ---@param opts manipulator.TS.Config
+---@return manipulator.Range
 function M.with_docs(self, opts)
 	-- doesn't get launched on Nil, but we still must check the opts
 	local lw_opts = { linewise = 'auto' }
@@ -221,6 +222,41 @@ function M.with_docs(self, opts)
 	end
 
 	return { s[1], s[2], e[3], e[4] }
+end
+
+--- Compared to deault behaviour, this ensures that the position of the choden end of the node
+--- changes, not just the overall range.
+---@param self manipulator.TS
+---@param end_ boolean should we check the end instead of the start of the node
+---@return manipulator.TS
+function M.until_new_pos(self, action, end_, ...)
+	if not self.buf then return self end
+	action = require('manipulator.batch').action_to_fn(action, ...)
+	local getCmp = self.range[end_ and 'end_' or 'start']
+	local pos = getCmp(self.range, true)
+	while self.buf and getCmp(self.range, true) == pos do
+		self = action(self)
+	end
+
+	return self
+end
+
+---@class manipulator.range_mods.autopar.Opts
+---@field autopar_current manipulator.Enabler matcher for type of current node
+---@field autopar_parent manipulator.Enabler matcher for type of parent node
+
+--- Automatically select the parent if the type conditions of the current and parent node are met
+---@param self manipulator.TS
+---@param opts manipulator.range_mods.autopar.Opts
+---@return manipulator.Range
+function M.autopar(self, opts)
+	U.activate_enabler(opts.autopar_current, '[^a-z_]')
+	U.activate_enabler(opts.autopar_parent, '[^a-z_]')
+	if self.node and opts.autopar_current[self.node:type()] then
+		local p = self.node:parent()
+		if p and opts.autopar_parent[p:type()] then return self:parent().range end
+	end
+	return self.range
 end
 
 return M

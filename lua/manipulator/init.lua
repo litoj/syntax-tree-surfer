@@ -8,10 +8,13 @@ local RM = require 'manipulator.range_mods'
 ---@field call_path manipulator.CallPath.module
 ---@field region manipulator.Region.module
 ---@field ts manipulator.TS.module
----@field Range manipulator.Range
----@field Pos manipulator.Pos
----@field RM manipulator.range_mods
-local M = {}
+local M = {
+	-- as class names, because there is no static wrapper
+	Range = require 'manipulator.range',
+	Pos = require 'manipulator.pos',
+	RM = RM,
+	U = U,
+}
 
 --- Configs for all submodules, that can have the following sections:
 --- 1. class options - default opts inherited by everyone in the module
@@ -190,11 +193,6 @@ function M.setup(config)
 		)
 		if rawget(m, '_post_setup') then m._post_setup() end
 	end
-
-	-- as class names, because there is no static wrapper
-	M.Range = require 'manipulator.range'
-	M.Pos = require 'manipulator.pos'
-	M.RM = require 'manipulator.range_mods'
 
 	return M
 end
