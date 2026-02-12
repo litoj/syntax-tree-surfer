@@ -79,8 +79,7 @@ M.default_config = {
 		types = {
 			['*'] = true,
 			-- most common node types directly in the defaults
-			'string_content',
-			'comment_content',
+			'_content$',
 
 			-- C/C++
 			'compound_statement',

@@ -32,8 +32,9 @@
     - Example (for the `ts` section):
       ```lua
       types = { inherit = 'active', 'list$' }, -- '*' is `true` -> matched nodes will be excluded
-      -- or - to allow luapat to override each other (TODO: order important, currenlty random)
-      types = { inherit = 'active', matchers = { ['list$'] = false } },
+      -- you can set a generic luapat and override it by setting the specific node to override
+      -- because order is: 1. direct index, 2. luapat match, 3. default value
+      types = { throw_statement = false, 'statement$'}
       presets = {
         -- Filetypes get mapped to TS lang names -> langpresets use the TS parser name
         latex = {
