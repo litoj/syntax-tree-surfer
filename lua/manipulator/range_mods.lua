@@ -122,11 +122,11 @@ do -- end_shift with adjustment for insert mode
 		opts = opts or {}
 		local r = Range.new(self)
 
-		local col = r[4] + (opts.shift_mode == 1 and 1 or 0) -- check the col to be added or removed
-		local char = r:end_():get_line():sub(col + 1, col + 1)
+		local col = r[4]
+		if opts.shift_mode == 'insert' and insert_modes[vim.fn.mode()] then col = col + 1 end
+		local char = r:end_(true):get_line():sub(col + 1, col + 1)
 
 		col = char:match(opts.end_shift_ptn or '^[, ]?$') and (opts.shift_mode == 1 and 1 or -1) or 0
-		if opts.shift_mode == 'insert' and insert_modes[vim.fn.mode()] then col = col + 1 end
 
 		if opts.shift_point_range and r[1] == r[3] and r[4] <= r[2] then r[2] = r[2] + col end
 		r[4] = r[4] + col
@@ -175,6 +175,7 @@ function M.pos_shift(r, opts)
 	return r
 end
 
+-- TODO: add a test for when the preceeding line should be included
 ---@param self manipulator.TS
 ---@param opts manipulator.TS.Config
 ---@return manipulator.Range

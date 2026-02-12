@@ -70,7 +70,7 @@ M.default_config = {
 		select = { linewise = 'auto', end_ = true },
 		swap = { visual = true, cursor_with = 'current' },
 
-		current = { fallback = '.', end_shift_ptn = '^$' },
+		current = { fallback = '.', end_shift_ptn = '^[, )%]}>]?$' },
 	},
 
 	ts = {

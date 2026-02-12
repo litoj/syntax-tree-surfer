@@ -269,9 +269,9 @@ function Region:jump(opts)
 
 	local r = Region.rangemod(self, opts, { shift_mode = 'insert', rangemod = RM.end_shift })
 
-	if opts.end_ and (opts.start_insert or vim.fn.mode() == 'i') then
+	if opts.start_insert and vim.fn.mode() ~= 'i' then
 		vim.cmd.startinsert()
-		r[4] = r[4] + 1
+		if opts.end_ then r[4] = r[4] + 1 end
 	end
 
 	Range.jump({ buf = self.buf, range = r }, opts.end_)
@@ -590,7 +590,7 @@ function M.current(opts)
 
 	-- Shift the end by 1 if in insert mode or at EOL in visual mode
 	if opts.shift_mode ~= false then
-		local es_ptn = opts.end_shift_ptn or true
+		local es_ptn = opts.end_shift_ptn or '^$'
 		if opts.shift_mode == 'point' or not mode or #mode > 1 then
 			-- visual forbidden, mouse EOL only, i+s modes fully shiftable
 			es_ptn = ({ [true] = '^$', i = es_ptn, s = es_ptn })[mode or expr == 'mouse' or vim.fn.mode()]
@@ -598,10 +598,12 @@ function M.current(opts)
 			-- remove only EOL in visual mode, but behave like insert for select mode
 			es_ptn = (mode == 'v' or mode == 'V') and '^$' or es_ptn
 		end
+
 		if es_ptn then
 			r = Range.get_or_make(RM.end_shift(r, {
 				shift_point_range = not mode,
-				end_shift_ptn = es_ptn ~= true and es_ptn or nil, -- ensure the default can be used
+				end_shift_ptn = es_ptn,
+				shift_mode = 'insert',
 			}))
 		end
 	end
