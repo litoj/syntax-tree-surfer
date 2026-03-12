@@ -76,9 +76,13 @@ function M.get_all(filter, ltree, opts)
 			if captures['@' .. c] then accepts[i] = true end
 		end
 		if vim.tbl_isempty(accepts) then
+			local renamed = {}
+			for _, m in ipairs(query.captures) do
+				renamed[#renamed + 1] = '@' .. m
+			end
 			error(
 				'Selected types do not match any defined capture group: '
-					.. vim.inspect { available = query.captures, requested = captures }
+					.. vim.inspect { available = renamed, requested = captures }
 			)
 		end
 	end

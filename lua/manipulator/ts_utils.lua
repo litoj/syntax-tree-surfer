@@ -122,66 +122,28 @@ function M.get_child(opts, node, ltree, idx)
 	end
 end
 
---- Depth-first search for a sub-node to the given side (first or last).
-local function find_valid_descendant(opts, node, ltree, idx, orig_parent)
-	if node:type() == 'inline' then -- XXX: partial fix for md inline
-		-- manages to match the inner inline node only if there is no `block_continuation`
-		node = ltree:named_node_for_range { node:range() }
-		if node:parent() then return end
+-- sift through identically-sized nodes until a new range
+---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree): TSNode,vim.treesitter.LanguageTree
+function M.get_identical_descendant(opts, node, ltree)
+	local child = node
+	while child:named_child_count() <= 1 do
+		node = child
+		child, ltree = M.get_child(opts, node, ltree, 0)
+		if not child or not Range.__eq({ node:range() }, { child:range() }) then break end
 	end
-
-	node, ltree = M.get_child(opts, node, ltree, idx)
-
-	while node do
-		if M.validate_parented_node(opts, orig_parent, nil, node, true) then return node, ltree end
-		local gchild, gtree = find_valid_descendant(opts, node, ltree, idx, orig_parent)
-		if M.validate_parented_node(opts, orig_parent, nil, gchild, true) then return gchild, gtree end
-
-		node = node[idx >= 0 and 'next_named_sibling' or 'prev_named_sibling'](node)
-	end
+	return node, ltree
 end
 
----@type fun(opts:manipulator.TS.QueryOpts, node:TSNode, ltree:vim.treesitter.LanguageTree,
----idx?:integer|Range4): (TSNode?,vim.treesitter.LanguageTree?)
-function M.get_descendant(opts, node, ltree, idx)
-	if not idx then idx = 0 end
-	local child = node
-
-	-- specified a particular index -> no readjustment to find the top-level result
-	if type(idx) == 'table' or idx > 0 or idx < -1 then
-		local cnt = node:named_child_count()
-
-		-- sift through identically-sized nodes until a new range
-		while cnt <= 1 do
-			node = child
-			child, ltree = M.get_child(opts, child, ltree, idx)
-			if child then
-				if not Range.__eq({ node:range() }, { child:range() }) then break end
-				cnt = child:named_child_count()
-			else
-				break
-			end
-		end
-
-		-- pick the node at the particular idx/position
-		if type(idx) == 'table' then
-			child = node:child_with_descendant(node:named_descendant_for_range(idx[1], idx[2], idx[3], idx[4]))
-		else
-			child = (cnt + idx) >= 0 and node:named_child(idx >= 0 and 0 or (cnt + idx)) ---@type TSNode?
-		end
-
-		-- if the picked node is valid, or non-existent, then we're done
-		if not child or M.validate_parented_node(opts, node, nil, child, true) then return child, ltree end
+-- sift through identically-sized nodes until a valid type, current node included
+---@type fun(opts:manipulator.TS.Opts, node:TSNode, ltree:vim.treesitter.LanguageTree): (TSNode?,vim.treesitter.LanguageTree?)
+function M.get_identical_valid_descendant(opts, node, ltree)
+	local child
+	while not opts.types[node:type()] do
+		child, ltree = M.get_child(opts, node, ltree, 0)
+		if not child or not Range.__eq({ node:range() }, { child:range() }) then return end
+		node = child
 	end
-
-	if opts.query then -- TODO: implement a version working for a specific index
-		local base_range = { node:range() }
-		local filter = function(node) return Range.cmp_containment(base_range, { node:range() }) > 0 end
-		node, ltree = TQ.get_all(filter, ltree, opts)
-		return TQ.sorted(node, idx == 0 and TQ.comparators.top_left or TQ.comparators.top_right, true), ltree
-	end
-
-	return find_valid_descendant(opts, child, ltree, idx, node)
+	return node, ltree
 end
 
 --- Traverse the graph left or right of the current node with the given restraints.

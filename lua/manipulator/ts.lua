@@ -200,26 +200,46 @@ function TS:parent(opts)
 	return self:new(node, ltree, opts), ltree ~= self.ltree
 end
 
+--- Get a descendant from somewhere in the subtree.
+--- Shortcut for calling TS.get(node:range(), opts)
+---@param opts? manipulator.TS.QueryOpts|string
+function TS:descendant(opts) return M.get(self:range(), opts) end
+
 --- Get a child node.
----@param idx? integer|Range4|'closer_edge' child index
+---@param idx? integer|Range4|'closer_edge'|string index or field name of the child
 --- - `<0` for reverse indexing, or a range it should contain
 --- - `'closer_edge'` to choose from the end closer to the cursor (default)
----@param opts? manipulator.TS.QueryOpts|string
+--- - `'name'` to get the node stored under the field `name` of this node
+---@param opts? manipulator.TS.Opts|string #
 ---@return manipulator.TS? node from the given direction
 ---@return boolean? changed_lang true if {node} is from a different language tree
 function TS:child(idx, opts)
 	if type(idx) == 'table' and not idx[1] then
-		---@diagnostic disable-next-line: cast-local-type
-		opts = idx
+		---@diagnostic disable-next-line: assign-type-mismatch
+		opts = idx ---@type manipulator.TS.Opts
 		idx = nil
 	end
 
 	opts = self:action_opts(opts, 'child')
-	if not idx or idx == 'closer_edge' then
-		idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
+	local node, ltree = TU.get_identical_descendant(opts, self.node, self.ltree)
+
+	-- get the child based on the index
+	if type(idx) == 'string' and idx ~= 'closer_edge' then -- field index / map key
+		node = node:field(idx)[1]
+	elseif type(idx) == 'table' then -- region index - node must contain the region
+		node = node:child_with_descendant(node:named_descendant_for_range(idx[1], idx[2], idx[3], idx[4]))
+	else -- pick the node at the particular idx/position
+		if not idx or idx == 'closer_edge' then
+			idx = Range.to_byte '.' > (select(3, self.node:start()) + select(3, self.node:end_())) / 2 and -1 or 0
+		end
+		local cnt = node:named_child_count()
+		node = (cnt + idx) >= 0 and node:named_child(idx >= 0 and 0 or (cnt + idx))
 	end
 
-	local node, ltree = TU.get_descendant(opts, self.node, self.ltree, idx)
+	if node then
+		node, ltree = TU.get_identical_valid_descendant(opts, node, ltree)
+	end
+
 	return self:new(node, ltree, opts), ltree ~= self.ltree
 end
 
